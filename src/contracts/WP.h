@@ -249,9 +249,9 @@ struct WOLFPACK : public ContractBase
             return;
         }
 
-        locals.stakerShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_STAKERS, 1000);
-        locals.shareholderShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS, 1000);
-        locals.clanShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_CLAN, 1000);
+        locals.stakerShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_STAKERS, 1000ULL);
+        locals.shareholderShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS, 1000ULL);
+        locals.clanShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_CLAN, 1000ULL);
         locals.reinvestShare = locals.amount - locals.stakerShare - locals.shareholderShare - locals.clanShare;
 
         state.mut().stakerPool = state.get().stakerPool + locals.stakerShare;
