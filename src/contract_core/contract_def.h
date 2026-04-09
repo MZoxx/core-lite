@@ -278,6 +278,16 @@
 
 #endif
 
+#undef CONTRACT_INDEX
+#undef CONTRACT_STATE_TYPE
+#undef CONTRACT_STATE2_TYPE
+
+#define WOLFPACK_CONTRACT_INDEX 27
+#define CONTRACT_INDEX WOLFPACK_CONTRACT_INDEX
+#define CONTRACT_STATE_TYPE WOLFPACK
+#define CONTRACT_STATE2_TYPE WOLFPACK2
+#include "contracts/WP.h"
+
 // new contracts should be added above this line
 
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
@@ -392,6 +402,7 @@ constexpr struct ContractDescription
 #ifndef NO_QUSINO
     {"QUSINO", 208, 10000, sizeof(QUSINO::StateData)}, // proposal in epoch 206, IPO in 207, construction and first use in 208
 #endif
+    {"WP", 210, 10000, sizeof(WOLFPACK::StateData)}, // WolfPack revenue distribution
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
@@ -516,6 +527,7 @@ static void initializeContracts()
 #ifndef NO_QUSINO
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(QUSINO);
 #endif
+    REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(WOLFPACK);
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES(TESTEXA);
