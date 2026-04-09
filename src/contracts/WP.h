@@ -499,8 +499,4 @@ struct WOLFPACK : public ContractBase
     END_TICK()
     {
     }
-
-    EXPAND()
-    {
-    }
 };
