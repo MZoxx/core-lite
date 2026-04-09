@@ -469,7 +469,7 @@ struct WOLFPACK : public ContractBase
             _C, _L, _R, _S, _Y, _Z, _I, _U, _E, _F, _D, _U, _R, _P, _W, _I,
             _P, _Q, _X, _A, _C, _Y, _O, _E
         );
-        state.mut().wpToken.assetName = assetNameFromString("WP");
+        state.mut().wpToken.assetName = 20567ULL; // "WP" as uint64
 
         state.mut().totalTokensSnapshot = 0;
         state.mut().holderCount = 0;
