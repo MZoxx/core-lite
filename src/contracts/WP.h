@@ -5,7 +5,7 @@ using namespace QPI;
 //
 // Revenue split:
 //   70% -> WP token holders (proportional to token holdings)
-//   10% -> SC shareholders (676 computor shareholders via burn)
+//   10% -> SC shareholders (676 SC shareholders)
 //   10% -> Active clan members (rank multiplier booster)
 //   10% -> Reinvestment fund
 //
@@ -19,6 +19,10 @@ constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS = 700;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS = 100;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_CLAN = 100;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_REINVEST = 100;
+
+// Payout timing
+constexpr uint8 WOLFPACK_PAYOUT_HOUR = 11; // 11:00 UTC
+constexpr uint64 WOLFPACK_MIN_PAYOUT_INTERVAL_TICKS = 1000; // prevent double-payout in same hour
 
 // Return codes
 constexpr uint32 WOLFPACK_OK = 0;
@@ -68,10 +72,7 @@ struct WOLFPACK : public ContractBase
         uint64 totalDistributed;
         uint64 totalDeposited;
         uint64 lastDistributionEpoch;
-
-        // Pools awaiting claims
-        uint64 holderPool;
-        uint64 clanPool;
+        uint64 lastPayoutTick;
 
         // Exclude addresses from distribution
         id excludeAddress1;
@@ -82,38 +83,6 @@ struct WOLFPACK : public ContractBase
 
     struct DepositRevenue_input { };
     struct DepositRevenue_output { uint32 returnCode; };
-
-    struct Distribute_input { };
-    struct Distribute_output { uint32 returnCode; uint64 distributed; };
-    struct Distribute_locals
-    {
-        uint64 amount;
-        uint64 holderShare;
-        uint64 shareholderShare;
-        uint64 clanShare;
-        uint64 reinvestShare;
-    };
-
-    struct ClaimHolderReward_input { };
-    struct ClaimHolderReward_output { uint32 returnCode; uint64 amount; };
-    struct ClaimHolderReward_locals
-    {
-        uint64 userTokens;
-        uint64 reward;
-        Entity entity;
-        uint64 balance;
-    };
-
-    struct ClaimClanReward_input { };
-    struct ClaimClanReward_output { uint32 returnCode; uint64 amount; };
-    struct ClaimClanReward_locals
-    {
-        uint64 rank;
-        uint64 multiplier;
-        uint64 reward;
-        Entity entity;
-        uint64 balance;
-    };
 
     struct AddClanMember_input { id memberAddress; uint64 rank; };
     struct AddClanMember_output { uint32 returnCode; };
@@ -142,8 +111,7 @@ struct WOLFPACK : public ContractBase
         uint64 reinvestmentFund;
         uint64 totalDistributed;
         uint64 totalDeposited;
-        uint64 holderPool;
-        uint64 clanPool;
+        uint64 lastPayoutTick;
         uint64 lastDistributionEpoch;
         id adminAddress;
     };
@@ -167,8 +135,7 @@ struct WOLFPACK : public ContractBase
         output.reinvestmentFund = state.get().reinvestmentFund;
         output.totalDistributed = state.get().totalDistributed;
         output.totalDeposited = state.get().totalDeposited;
-        output.holderPool = state.get().holderPool;
-        output.clanPool = state.get().clanPool;
+        output.lastPayoutTick = state.get().lastPayoutTick;
         output.lastDistributionEpoch = state.get().lastDistributionEpoch;
         output.adminAddress = state.get().adminAddress;
     }
@@ -202,114 +169,6 @@ struct WOLFPACK : public ContractBase
         }
         state.mut().pendingRevenue = state.get().pendingRevenue + qpi.invocationReward();
         state.mut().totalDeposited = state.get().totalDeposited + qpi.invocationReward();
-        output.returnCode = WOLFPACK_OK;
-    }
-
-    PUBLIC_PROCEDURE_WITH_LOCALS(Distribute)
-    {
-        locals.amount = state.get().pendingRevenue;
-        if (locals.amount == 0)
-        {
-            output.returnCode = WOLFPACK_ERROR_ZERO_AMOUNT;
-            return;
-        }
-
-        locals.holderShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS, 1000ULL);
-        locals.shareholderShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS, 1000ULL);
-        locals.clanShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_CLAN, 1000ULL);
-        locals.reinvestShare = locals.amount - locals.holderShare - locals.shareholderShare - locals.clanShare;
-
-        state.mut().holderPool = state.get().holderPool + locals.holderShare;
-        state.mut().clanPool = state.get().clanPool + locals.clanShare;
-        state.mut().reinvestmentFund = state.get().reinvestmentFund + locals.reinvestShare;
-        state.mut().pendingRevenue = 0;
-        state.mut().totalDistributed = state.get().totalDistributed + locals.amount;
-        state.mut().lastDistributionEpoch = qpi.epoch();
-
-        qpi.burn(locals.shareholderShare);
-
-        output.distributed = locals.amount;
-        output.returnCode = WOLFPACK_OK;
-    }
-
-    PUBLIC_PROCEDURE_WITH_LOCALS(ClaimHolderReward)
-    {
-        if (!state.get().holderBalances.get(qpi.invocator(), locals.userTokens))
-        {
-            output.returnCode = WOLFPACK_ERROR_NOT_HOLDER;
-            return;
-        }
-
-        if (state.get().totalTokensSnapshot == 0 || state.get().holderPool == 0)
-        {
-            output.returnCode = WOLFPACK_ERROR_NO_REWARD;
-            return;
-        }
-
-        locals.reward = div(state.get().holderPool * locals.userTokens, state.get().totalTokensSnapshot);
-        if (locals.reward == 0)
-        {
-            output.returnCode = WOLFPACK_ERROR_NO_REWARD;
-            return;
-        }
-
-        qpi.getEntity(SELF, locals.entity);
-        locals.balance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
-        if (locals.balance < locals.reward)
-        {
-            locals.reward = locals.balance;
-        }
-
-        state.mut().holderPool = state.get().holderPool - locals.reward;
-        // Remove holder from snapshot after claim to prevent double-claiming
-        state.mut().holderBalances.removeByKey(qpi.invocator());
-        state.mut().totalTokensSnapshot = state.get().totalTokensSnapshot - locals.userTokens;
-        state.mut().holderCount = state.get().holderCount - 1;
-
-        qpi.transfer(qpi.invocator(), locals.reward);
-
-        output.amount = locals.reward;
-        output.returnCode = WOLFPACK_OK;
-    }
-
-    PUBLIC_PROCEDURE_WITH_LOCALS(ClaimClanReward)
-    {
-        if (!state.get().clanRanks.get(qpi.invocator(), locals.rank))
-        {
-            output.returnCode = WOLFPACK_ERROR_NOT_CLAN_MEMBER;
-            return;
-        }
-
-        if (state.get().clanPool == 0 || state.get().clanWeightedTotal == 0)
-        {
-            output.returnCode = WOLFPACK_ERROR_NO_REWARD;
-            return;
-        }
-
-        locals.multiplier = WOLFPACK_RANK_MULTIPLIER_0;
-        if (locals.rank == 1) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_1;
-        if (locals.rank == 2) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_2;
-        if (locals.rank == 3) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_3;
-        if (locals.rank == 4) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_4;
-
-        locals.reward = div(state.get().clanPool * locals.multiplier, state.get().clanWeightedTotal);
-        if (locals.reward == 0)
-        {
-            output.returnCode = WOLFPACK_ERROR_NO_REWARD;
-            return;
-        }
-
-        qpi.getEntity(SELF, locals.entity);
-        locals.balance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
-        if (locals.balance < locals.reward)
-        {
-            locals.reward = locals.balance;
-        }
-
-        state.mut().clanPool = state.get().clanPool - locals.reward;
-        qpi.transfer(qpi.invocator(), locals.reward);
-
-        output.amount = locals.reward;
         output.returnCode = WOLFPACK_OK;
     }
 
@@ -446,14 +305,11 @@ struct WOLFPACK : public ContractBase
         REGISTER_USER_FUNCTION(GetClanMemberInfo, 3);
 
         REGISTER_USER_PROCEDURE(DepositRevenue, 1);
-        REGISTER_USER_PROCEDURE(Distribute, 2);
-        REGISTER_USER_PROCEDURE(ClaimHolderReward, 3);
-        REGISTER_USER_PROCEDURE(ClaimClanReward, 4);
-        REGISTER_USER_PROCEDURE(AddClanMember, 5);
-        REGISTER_USER_PROCEDURE(RemoveClanMember, 6);
-        REGISTER_USER_PROCEDURE(SetClanRank, 7);
-        REGISTER_USER_PROCEDURE(SetAdmin, 8);
-        REGISTER_USER_PROCEDURE(SetExcludeAddress, 9);
+        REGISTER_USER_PROCEDURE(AddClanMember, 2);
+        REGISTER_USER_PROCEDURE(RemoveClanMember, 3);
+        REGISTER_USER_PROCEDURE(SetClanRank, 4);
+        REGISTER_USER_PROCEDURE(SetAdmin, 5);
+        REGISTER_USER_PROCEDURE(SetExcludeAddress, 6);
     }
 
     // ======================== SYSTEM PROCEDURES ========================
@@ -480,8 +336,7 @@ struct WOLFPACK : public ContractBase
         state.mut().totalDistributed = 0;
         state.mut().totalDeposited = 0;
         state.mut().lastDistributionEpoch = 0;
-        state.mut().holderPool = 0;
-        state.mut().clanPool = 0;
+        state.mut().lastPayoutTick = 0;
         state.mut().excludeAddress1 = NULL_ID;
         state.mut().excludeAddress2 = NULL_ID;
     }
@@ -550,7 +405,145 @@ struct WOLFPACK : public ContractBase
     {
     }
 
-    END_TICK()
+    // Auto-payout at 11:00 UTC daily
+    struct END_TICK_locals
     {
+        uint64 amount;
+        uint64 holderShare;
+        uint64 shareholderShare;
+        uint64 clanShare;
+        uint64 reinvestShare;
+        sint64 idx;
+        id holder;
+        uint64 tokens;
+        uint64 reward;
+        uint64 rank;
+        uint64 multiplier;
+        Entity entity;
+        uint64 contractBalance;
+    };
+    END_TICK_WITH_LOCALS()
+    {
+        // Gate: only at hour 11 and enough ticks since last payout
+        if (qpi.hour() != WOLFPACK_PAYOUT_HOUR)
+        {
+            return;
+        }
+        if (state.get().lastPayoutTick != 0 &&
+            qpi.tick() < state.get().lastPayoutTick + WOLFPACK_MIN_PAYOUT_INTERVAL_TICKS)
+        {
+            return;
+        }
+        if (state.get().pendingRevenue == 0)
+        {
+            return;
+        }
+
+        // --- Step 1: Split revenue ---
+        locals.amount = state.get().pendingRevenue;
+        locals.holderShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS, 1000ULL);
+        locals.shareholderShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS, 1000ULL);
+        locals.clanShare = div(locals.amount * WOLFPACK_DISTRIBUTION_PERMILLE_CLAN, 1000ULL);
+        locals.reinvestShare = locals.amount - locals.holderShare - locals.shareholderShare - locals.clanShare;
+
+        state.mut().pendingRevenue = 0;
+        state.mut().totalDistributed = state.get().totalDistributed + locals.amount;
+        state.mut().lastDistributionEpoch = qpi.epoch();
+        state.mut().lastPayoutTick = qpi.tick();
+        state.mut().reinvestmentFund = state.get().reinvestmentFund + locals.reinvestShare;
+
+        // 10% to SC shareholders
+        if (locals.shareholderShare > 0)
+        {
+            qpi.burn(locals.shareholderShare);
+        }
+
+        // --- Step 2: Push 70% to token holders ---
+        if (locals.holderShare > 0 && state.get().totalTokensSnapshot > 0)
+        {
+            qpi.getEntity(SELF, locals.entity);
+            locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
+
+            locals.idx = NULL_INDEX;
+            while (true)
+            {
+                locals.idx = state.get().holderBalances.nextElementIndex(locals.idx);
+                if (locals.idx == NULL_INDEX)
+                {
+                    break;
+                }
+                locals.holder = state.get().holderBalances.key(locals.idx);
+                locals.tokens = state.get().holderBalances.value(locals.idx);
+
+                if (locals.tokens == 0)
+                {
+                    continue;
+                }
+
+                locals.reward = div(locals.holderShare * locals.tokens, state.get().totalTokensSnapshot);
+                if (locals.reward == 0)
+                {
+                    continue;
+                }
+                if (locals.reward > locals.contractBalance)
+                {
+                    locals.reward = locals.contractBalance;
+                }
+
+                qpi.transfer(locals.holder, locals.reward);
+                locals.contractBalance = locals.contractBalance - locals.reward;
+
+                if (locals.contractBalance == 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        // --- Step 3: Push 10% to clan members ---
+        if (locals.clanShare > 0 && state.get().clanWeightedTotal > 0)
+        {
+            if (locals.contractBalance == 0)
+            {
+                qpi.getEntity(SELF, locals.entity);
+                locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
+            }
+
+            locals.idx = NULL_INDEX;
+            while (true)
+            {
+                locals.idx = state.get().clanRanks.nextElementIndex(locals.idx);
+                if (locals.idx == NULL_INDEX)
+                {
+                    break;
+                }
+                locals.holder = state.get().clanRanks.key(locals.idx);
+                locals.rank = state.get().clanRanks.value(locals.idx);
+
+                locals.multiplier = WOLFPACK_RANK_MULTIPLIER_0;
+                if (locals.rank == 1) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_1;
+                if (locals.rank == 2) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_2;
+                if (locals.rank == 3) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_3;
+                if (locals.rank == 4) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_4;
+
+                locals.reward = div(locals.clanShare * locals.multiplier, state.get().clanWeightedTotal);
+                if (locals.reward == 0)
+                {
+                    continue;
+                }
+                if (locals.reward > locals.contractBalance)
+                {
+                    locals.reward = locals.contractBalance;
+                }
+
+                qpi.transfer(locals.holder, locals.reward);
+                locals.contractBalance = locals.contractBalance - locals.reward;
+
+                if (locals.contractBalance == 0)
+                {
+                    break;
+                }
+            }
+        }
     }
 };
