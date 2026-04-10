@@ -5,20 +5,23 @@ using namespace QPI;
 //
 // Revenue split:
 //   70% -> WP token holders (proportional to token holdings)
-//   10% -> SC shareholders (676 SC shareholders)
+//   10% -> SC shareholders (676 SC shareholders, issuer=NULL_ID)
 //   10% -> Active clan members (rank multiplier booster)
 //   10% -> Reinvestment fund
 //
 // WP token holders are snapshotted at BEGIN_EPOCH via AssetPossessionIterator.
+// SC shareholders (IPO shares) are also snapshotted at BEGIN_EPOCH separately.
 // ============================================================================
 
 // --- Constants ---
 constexpr uint64 WOLFPACK_MAX_HOLDERS = 16384;
+constexpr uint64 WOLFPACK_MAX_SHAREHOLDERS = 1024;
 constexpr uint64 WOLFPACK_MAX_CLAN_MEMBERS = 8192;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS = 700;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS = 100;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_CLAN = 100;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_REINVEST = 100;
+constexpr uint64 WOLFPACK_SC_ASSET_NAME = 20567ULL; // "WP" as uint64
 
 // Payout timing
 constexpr uint8 WOLFPACK_PAYOUT_HOUR = 11; // 11:00 UTC
@@ -53,13 +56,19 @@ struct WOLFPACK : public ContractBase
     {
         id adminAddress;
 
-        // WP token asset reference
+        // WP token asset reference (external token on QX)
         Asset wpToken;
 
-        // Token holder snapshot (taken at BEGIN_EPOCH)
+        // Token holder snapshot (taken at BEGIN_EPOCH) - 70% pool
         HashMap<id, uint64, WOLFPACK_MAX_HOLDERS> holderBalances;
         uint64 totalTokensSnapshot;
         uint64 holderCount;
+
+        // SC shareholder snapshot (taken at BEGIN_EPOCH) - 10% pool
+        // These are the 676 IPO shares (issuer=NULL_ID, name="WP")
+        HashMap<id, uint64, WOLFPACK_MAX_SHAREHOLDERS> shareholderBalances;
+        uint64 totalSharesSnapshot;
+        uint64 shareholderCount;
 
         // Clan system
         HashMap<id, uint64, WOLFPACK_MAX_CLAN_MEMBERS> clanRanks;
@@ -106,6 +115,8 @@ struct WOLFPACK : public ContractBase
     {
         uint64 holderCount;
         uint64 totalTokensSnapshot;
+        uint64 shareholderCount;
+        uint64 totalSharesSnapshot;
         uint64 clanMemberCount;
         uint64 pendingRevenue;
         uint64 reinvestmentFund;
@@ -120,6 +131,10 @@ struct WOLFPACK : public ContractBase
     struct GetHolderInfo_output { uint64 tokenBalance; uint32 isHolder; };
     struct GetHolderInfo_locals { uint64 val; };
 
+    struct GetShareholderInfo_input { id shareholderAddress; };
+    struct GetShareholderInfo_output { uint64 shares; uint32 isShareholder; };
+    struct GetShareholderInfo_locals { uint64 val; };
+
     struct GetClanMemberInfo_input { id memberAddress; };
     struct GetClanMemberInfo_output { uint64 rank; uint32 isMember; };
     struct GetClanMemberInfo_locals { uint64 val; };
@@ -130,6 +145,8 @@ struct WOLFPACK : public ContractBase
     {
         output.holderCount = state.get().holderCount;
         output.totalTokensSnapshot = state.get().totalTokensSnapshot;
+        output.shareholderCount = state.get().shareholderCount;
+        output.totalSharesSnapshot = state.get().totalSharesSnapshot;
         output.clanMemberCount = state.get().clanMemberCount;
         output.pendingRevenue = state.get().pendingRevenue;
         output.reinvestmentFund = state.get().reinvestmentFund;
@@ -146,6 +163,15 @@ struct WOLFPACK : public ContractBase
         if (output.isHolder)
         {
             output.tokenBalance = locals.val;
+        }
+    }
+
+    PUBLIC_FUNCTION_WITH_LOCALS(GetShareholderInfo)
+    {
+        output.isShareholder = state.get().shareholderBalances.get(input.shareholderAddress, locals.val) ? 1 : 0;
+        if (output.isShareholder)
+        {
+            output.shares = locals.val;
         }
     }
 
@@ -303,6 +329,7 @@ struct WOLFPACK : public ContractBase
         REGISTER_USER_FUNCTION(GetStatus, 1);
         REGISTER_USER_FUNCTION(GetHolderInfo, 2);
         REGISTER_USER_FUNCTION(GetClanMemberInfo, 3);
+        REGISTER_USER_FUNCTION(GetShareholderInfo, 4);
 
         REGISTER_USER_PROCEDURE(DepositRevenue, 1);
         REGISTER_USER_PROCEDURE(AddClanMember, 2);
@@ -318,17 +345,19 @@ struct WOLFPACK : public ContractBase
     {
         state.mut().adminAddress = qpi.originator();
 
-        // WP token: issuer = MLMWPSQNVAIBRFDHWCKSFOVUAZDDWKJGCLRSYZIUEFDURPWIPQXACYOEPMLB
+        // WP token (external, issued on QX by MLMWPS...)
         state.mut().wpToken.issuer = ID(
             _M, _L, _M, _W, _P, _S, _Q, _N, _V, _A, _I, _B, _R, _F, _D, _H,
             _W, _C, _K, _S, _F, _O, _V, _U, _A, _Z, _D, _D, _W, _K, _J, _G,
             _C, _L, _R, _S, _Y, _Z, _I, _U, _E, _F, _D, _U, _R, _P, _W, _I,
             _P, _Q, _X, _A, _C, _Y, _O, _E
         );
-        state.mut().wpToken.assetName = 20567ULL; // "WP" as uint64
+        state.mut().wpToken.assetName = WOLFPACK_SC_ASSET_NAME; // "WP"
 
         state.mut().totalTokensSnapshot = 0;
         state.mut().holderCount = 0;
+        state.mut().totalSharesSnapshot = 0;
+        state.mut().shareholderCount = 0;
         state.mut().clanMemberCount = 0;
         state.mut().clanWeightedTotal = 0;
         state.mut().pendingRevenue = 0;
@@ -341,40 +370,33 @@ struct WOLFPACK : public ContractBase
         state.mut().excludeAddress2 = NULL_ID;
     }
 
-    // Snapshot all WP token holders at the start of each epoch
+    // Snapshot WP token holders AND SC shareholders at the start of each epoch
     struct BEGIN_EPOCH_locals
     {
-        AssetPossessionIterator iter;
+        AssetPossessionIterator tokenIter;
+        AssetPossessionIterator scIter;
+        Asset scAsset;
         uint64 balance;
         id holder;
         uint64 existingBalance;
     };
     BEGIN_EPOCH_WITH_LOCALS()
     {
-        // Reset snapshot
+        // ---- Pass 1: WP Token holders (external token, issuer=MLMWPS...) ----
         state.mut().holderBalances.reset();
         state.mut().totalTokensSnapshot = 0;
         state.mut().holderCount = 0;
 
         if (state.get().wpToken.issuer != NULL_ID)
         {
-            for (locals.iter.begin(state.get().wpToken); !locals.iter.reachedEnd(); locals.iter.next())
+            for (locals.tokenIter.begin(state.get().wpToken); !locals.tokenIter.reachedEnd(); locals.tokenIter.next())
             {
-                if (locals.iter.possessor() == SELF)
-                {
-                    continue;
-                }
-                if (state.get().excludeAddress1 != NULL_ID && locals.iter.possessor() == state.get().excludeAddress1)
-                {
-                    continue;
-                }
-                if (state.get().excludeAddress2 != NULL_ID && locals.iter.possessor() == state.get().excludeAddress2)
-                {
-                    continue;
-                }
+                if (locals.tokenIter.possessor() == SELF) continue;
+                if (state.get().excludeAddress1 != NULL_ID && locals.tokenIter.possessor() == state.get().excludeAddress1) continue;
+                if (state.get().excludeAddress2 != NULL_ID && locals.tokenIter.possessor() == state.get().excludeAddress2) continue;
 
-                locals.balance = locals.iter.numberOfPossessedShares();
-                locals.holder = locals.iter.possessor();
+                locals.balance = locals.tokenIter.numberOfPossessedShares();
+                locals.holder = locals.tokenIter.possessor();
 
                 if (locals.balance > 0)
                 {
@@ -384,11 +406,45 @@ struct WOLFPACK : public ContractBase
 
                     if (state.mut().holderBalances.set(locals.holder, locals.balance) != NULL_INDEX)
                     {
-                        state.mut().totalTokensSnapshot = sadd(state.get().totalTokensSnapshot, (uint64)locals.iter.numberOfPossessedShares());
+                        state.mut().totalTokensSnapshot = sadd(state.get().totalTokensSnapshot, (uint64)locals.tokenIter.numberOfPossessedShares());
                         if (locals.existingBalance == 0)
                         {
                             state.mut().holderCount = state.get().holderCount + 1;
                         }
+                    }
+                }
+            }
+        }
+
+        // ---- Pass 2: SC shareholders (IPO shares, issuer=NULL_ID, name="WP") ----
+        state.mut().shareholderBalances.reset();
+        state.mut().totalSharesSnapshot = 0;
+        state.mut().shareholderCount = 0;
+
+        locals.scAsset.issuer = NULL_ID;
+        locals.scAsset.assetName = WOLFPACK_SC_ASSET_NAME;
+
+        for (locals.scIter.begin(locals.scAsset); !locals.scIter.reachedEnd(); locals.scIter.next())
+        {
+            if (locals.scIter.possessor() == SELF) continue;
+            if (state.get().excludeAddress1 != NULL_ID && locals.scIter.possessor() == state.get().excludeAddress1) continue;
+            if (state.get().excludeAddress2 != NULL_ID && locals.scIter.possessor() == state.get().excludeAddress2) continue;
+
+            locals.balance = locals.scIter.numberOfPossessedShares();
+            locals.holder = locals.scIter.possessor();
+
+            if (locals.balance > 0)
+            {
+                locals.existingBalance = 0;
+                state.get().shareholderBalances.get(locals.holder, locals.existingBalance);
+                locals.balance = sadd(locals.existingBalance, locals.balance);
+
+                if (state.mut().shareholderBalances.set(locals.holder, locals.balance) != NULL_INDEX)
+                {
+                    state.mut().totalSharesSnapshot = sadd(state.get().totalSharesSnapshot, (uint64)locals.scIter.numberOfPossessedShares());
+                    if (locals.existingBalance == 0)
+                    {
+                        state.mut().shareholderCount = state.get().shareholderCount + 1;
                     }
                 }
             }
@@ -398,6 +454,7 @@ struct WOLFPACK : public ContractBase
     END_EPOCH()
     {
         state.mut().holderBalances.cleanupIfNeeded();
+        state.mut().shareholderBalances.cleanupIfNeeded();
         state.mut().clanRanks.cleanupIfNeeded();
     }
 
@@ -452,55 +509,60 @@ struct WOLFPACK : public ContractBase
         state.mut().lastPayoutTick = qpi.tick();
         state.mut().reinvestmentFund = state.get().reinvestmentFund + locals.reinvestShare;
 
-        // 10% to SC shareholders
-        if (locals.shareholderShare > 0)
-        {
-            qpi.burn(locals.shareholderShare);
-        }
+        qpi.getEntity(SELF, locals.entity);
+        locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
 
-        // --- Step 2: Push 70% to token holders ---
+        // --- Step 2: Push 70% to WP token holders ---
         if (locals.holderShare > 0 && state.get().totalTokensSnapshot > 0)
         {
-            qpi.getEntity(SELF, locals.entity);
-            locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
-
             locals.idx = NULL_INDEX;
             while (true)
             {
                 locals.idx = state.get().holderBalances.nextElementIndex(locals.idx);
-                if (locals.idx == NULL_INDEX)
-                {
-                    break;
-                }
+                if (locals.idx == NULL_INDEX) break;
                 locals.holder = state.get().holderBalances.key(locals.idx);
                 locals.tokens = state.get().holderBalances.value(locals.idx);
-
-                if (locals.tokens == 0)
-                {
-                    continue;
-                }
+                if (locals.tokens == 0) continue;
 
                 locals.reward = div(locals.holderShare * locals.tokens, state.get().totalTokensSnapshot);
-                if (locals.reward == 0)
-                {
-                    continue;
-                }
-                if (locals.reward > locals.contractBalance)
-                {
-                    locals.reward = locals.contractBalance;
-                }
+                if (locals.reward == 0) continue;
+                if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
                 qpi.transfer(locals.holder, locals.reward);
                 locals.contractBalance = locals.contractBalance - locals.reward;
-
-                if (locals.contractBalance == 0)
-                {
-                    break;
-                }
+                if (locals.contractBalance == 0) break;
             }
         }
 
-        // --- Step 3: Push 10% to clan members ---
+        // --- Step 3: Push 10% to SC shareholders ---
+        if (locals.shareholderShare > 0 && state.get().totalSharesSnapshot > 0)
+        {
+            if (locals.contractBalance == 0)
+            {
+                qpi.getEntity(SELF, locals.entity);
+                locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
+            }
+
+            locals.idx = NULL_INDEX;
+            while (true)
+            {
+                locals.idx = state.get().shareholderBalances.nextElementIndex(locals.idx);
+                if (locals.idx == NULL_INDEX) break;
+                locals.holder = state.get().shareholderBalances.key(locals.idx);
+                locals.tokens = state.get().shareholderBalances.value(locals.idx);
+                if (locals.tokens == 0) continue;
+
+                locals.reward = div(locals.shareholderShare * locals.tokens, state.get().totalSharesSnapshot);
+                if (locals.reward == 0) continue;
+                if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
+
+                qpi.transfer(locals.holder, locals.reward);
+                locals.contractBalance = locals.contractBalance - locals.reward;
+                if (locals.contractBalance == 0) break;
+            }
+        }
+
+        // --- Step 4: Push 10% to clan members ---
         if (locals.clanShare > 0 && state.get().clanWeightedTotal > 0)
         {
             if (locals.contractBalance == 0)
@@ -513,10 +575,7 @@ struct WOLFPACK : public ContractBase
             while (true)
             {
                 locals.idx = state.get().clanRanks.nextElementIndex(locals.idx);
-                if (locals.idx == NULL_INDEX)
-                {
-                    break;
-                }
+                if (locals.idx == NULL_INDEX) break;
                 locals.holder = state.get().clanRanks.key(locals.idx);
                 locals.rank = state.get().clanRanks.value(locals.idx);
 
@@ -527,22 +586,12 @@ struct WOLFPACK : public ContractBase
                 if (locals.rank == 4) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_4;
 
                 locals.reward = div(locals.clanShare * locals.multiplier, state.get().clanWeightedTotal);
-                if (locals.reward == 0)
-                {
-                    continue;
-                }
-                if (locals.reward > locals.contractBalance)
-                {
-                    locals.reward = locals.contractBalance;
-                }
+                if (locals.reward == 0) continue;
+                if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
                 qpi.transfer(locals.holder, locals.reward);
                 locals.contractBalance = locals.contractBalance - locals.reward;
-
-                if (locals.contractBalance == 0)
-                {
-                    break;
-                }
+                if (locals.contractBalance == 0) break;
             }
         }
     }
