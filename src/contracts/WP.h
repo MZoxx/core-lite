@@ -478,6 +478,8 @@ struct WOLFPACK : public ContractBase
         uint64 multiplier;
         Entity entity;
         uint64 contractBalance;
+        uint64 quotient;
+        uint64 remainder;
     };
     END_TICK_WITH_LOCALS()
     {
@@ -524,7 +526,9 @@ struct WOLFPACK : public ContractBase
                 locals.tokens = state.get().holderBalances.value(locals.idx);
                 if (locals.tokens == 0) continue;
 
-                locals.reward = div(locals.holderShare * locals.tokens, state.get().totalTokensSnapshot);
+                locals.quotient = div(locals.holderShare, state.get().totalTokensSnapshot);
+                locals.remainder = mod(locals.holderShare, state.get().totalTokensSnapshot);
+                locals.reward = locals.quotient * locals.tokens + div(locals.remainder * locals.tokens, state.get().totalTokensSnapshot);
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
@@ -552,7 +556,9 @@ struct WOLFPACK : public ContractBase
                 locals.tokens = state.get().shareholderBalances.value(locals.idx);
                 if (locals.tokens == 0) continue;
 
-                locals.reward = div(locals.shareholderShare * locals.tokens, state.get().totalSharesSnapshot);
+                locals.quotient = div(locals.shareholderShare, state.get().totalSharesSnapshot);
+                locals.remainder = mod(locals.shareholderShare, state.get().totalSharesSnapshot);
+                locals.reward = locals.quotient * locals.tokens + div(locals.remainder * locals.tokens, state.get().totalSharesSnapshot);
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
@@ -585,7 +591,9 @@ struct WOLFPACK : public ContractBase
                 if (locals.rank == 3) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_3;
                 if (locals.rank == 4) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_4;
 
-                locals.reward = div(locals.clanShare * locals.multiplier, state.get().clanWeightedTotal);
+                locals.quotient = div(locals.clanShare, state.get().clanWeightedTotal);
+                locals.remainder = mod(locals.clanShare, state.get().clanWeightedTotal);
+                locals.reward = locals.quotient * locals.multiplier + div(locals.remainder * locals.multiplier, state.get().clanWeightedTotal);
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
