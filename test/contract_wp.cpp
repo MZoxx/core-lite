@@ -157,6 +157,54 @@ public:
         callFunction(WOLFPACK_CONTRACT_INDEX, 4, input, output);
         return output;
     }
+
+    WOLFPACK::GetStakingInfo_output getStakingInfo(const id& staker)
+    {
+        WOLFPACK::GetStakingInfo_input input{ staker };
+        WOLFPACK::GetStakingInfo_output output;
+        callFunction(WOLFPACK_CONTRACT_INDEX, 5, input, output);
+        return output;
+    }
+
+    WOLFPACK::Stake_output stake(const id& sender, uint64 numberOfShares)
+    {
+        WOLFPACK::Stake_input input{ numberOfShares };
+        WOLFPACK::Stake_output output;
+        invokeUserProcedure(WOLFPACK_CONTRACT_INDEX, 7, input, output, sender, 0);
+        return output;
+    }
+
+    WOLFPACK::RequestUnstake_output requestUnstake(const id& sender, uint64 numberOfShares)
+    {
+        WOLFPACK::RequestUnstake_input input{ numberOfShares };
+        WOLFPACK::RequestUnstake_output output;
+        invokeUserProcedure(WOLFPACK_CONTRACT_INDEX, 8, input, output, sender, 0);
+        return output;
+    }
+
+    WOLFPACK::FinalizeUnstake_output finalizeUnstake(const id& sender)
+    {
+        WOLFPACK::FinalizeUnstake_input input;
+        WOLFPACK::FinalizeUnstake_output output;
+        invokeUserProcedure(WOLFPACK_CONTRACT_INDEX, 9, input, output, sender, 0);
+        return output;
+    }
+
+    WOLFPACK::DepositStakingRewards_output depositStakingRewards(const id& sender, uint64 numberOfShares)
+    {
+        WOLFPACK::DepositStakingRewards_input input{ numberOfShares };
+        WOLFPACK::DepositStakingRewards_output output;
+        invokeUserProcedure(WOLFPACK_CONTRACT_INDEX, 10, input, output, sender, 0);
+        return output;
+    }
+
+    WOLFPACK::ClaimStakingRewards_output claimStakingRewards(const id& sender)
+    {
+        WOLFPACK::ClaimStakingRewards_input input;
+        WOLFPACK::ClaimStakingRewards_output output;
+        invokeUserProcedure(WOLFPACK_CONTRACT_INDEX, 11, input, output, sender, 0);
+        return output;
+    }
 };
 
 // ============================================================================
@@ -436,4 +484,344 @@ TEST(TestWolfPack, RevenueSplitMath)
     EXPECT_EQ(clanShare, 100000ULL);
     EXPECT_EQ(reinvestShare, 100000ULL);
     EXPECT_EQ(holderShare + shareholderShare + clanShare + reinvestShare, amount);
+}
+
+// ============================================================================
+// Staking - Initialization
+// ============================================================================
+
+TEST(TestWolfPack, StakingInitialization)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    EXPECT_EQ(s->totalStaked, 0ULL);
+    EXPECT_EQ(s->stakerCount, 0ULL);
+    EXPECT_EQ(s->unstakeCount, 0ULL);
+    EXPECT_EQ(s->stakingRewardPool, 0ULL);
+    EXPECT_EQ(s->totalStakingRewardsDistributed, 0ULL);
+}
+
+// ============================================================================
+// Staking - Stake
+// ============================================================================
+
+TEST(TestWolfPack, StakeZeroFails)
+{
+    ContractTestingWP wp;
+
+    auto out = wp.stake(user1, 0);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_ZERO_AMOUNT);
+}
+
+TEST(TestWolfPack, StakeStateTracking)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    // Simulate staking by directly setting state (acquireShares needs real universe)
+    s->stakedBalances.set(user1, 100);
+    s->totalStaked = 100;
+    s->stakerCount = 1;
+
+    EXPECT_EQ(s->totalStaked, 100ULL);
+    EXPECT_EQ(s->stakerCount, 1ULL);
+
+    // Verify via GetStakingInfo function
+    auto info = wp.getStakingInfo(user1);
+    EXPECT_EQ(info.isStaker, 1u);
+    EXPECT_EQ(info.stakedAmount, 100ULL);
+    EXPECT_EQ(info.totalStaked, 100ULL);
+
+    // Non-staker
+    auto info2 = wp.getStakingInfo(user2);
+    EXPECT_EQ(info2.isStaker, 0u);
+    EXPECT_EQ(info2.stakedAmount, 0ULL);
+}
+
+// ============================================================================
+// Staking - RequestUnstake
+// ============================================================================
+
+TEST(TestWolfPack, RequestUnstakeZeroFails)
+{
+    ContractTestingWP wp;
+
+    auto out = wp.requestUnstake(user1, 0);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_ZERO_AMOUNT);
+}
+
+TEST(TestWolfPack, RequestUnstakeNotStaker)
+{
+    ContractTestingWP wp;
+
+    auto out = wp.requestUnstake(user1, 50);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_NOT_STAKER);
+}
+
+TEST(TestWolfPack, RequestUnstakeInsufficientStake)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    // Simulate staked state
+    s->stakedBalances.set(user1, 100);
+    s->totalStaked = 100;
+    s->stakerCount = 1;
+
+    auto out = wp.requestUnstake(user1, 200);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_INSUFFICIENT_STAKE);
+}
+
+TEST(TestWolfPack, RequestUnstakePartial)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakedBalances.set(user1, 100);
+    s->totalStaked = 100;
+    s->stakerCount = 1;
+
+    auto out = wp.requestUnstake(user1, 40);
+    EXPECT_EQ(out.returnCode, WOLFPACK_OK);
+    EXPECT_EQ(s->totalStaked, 60ULL);
+    EXPECT_EQ(s->stakerCount, 1ULL);
+    EXPECT_EQ(s->unstakeCount, 1ULL);
+
+    // Check remaining stake
+    uint64 remaining = 0;
+    EXPECT_TRUE(s->stakedBalances.get(user1, remaining));
+    EXPECT_EQ(remaining, 60ULL);
+
+    // Check unstake request
+    uint64 unstakeAmt = 0;
+    EXPECT_TRUE(s->unstakeAmounts.get(user1, unstakeAmt));
+    EXPECT_EQ(unstakeAmt, 40ULL);
+
+    uint64 unstakeEpoch = 0;
+    EXPECT_TRUE(s->unstakeEpochs.get(user1, unstakeEpoch));
+}
+
+TEST(TestWolfPack, RequestUnstakeFull)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakedBalances.set(user1, 100);
+    s->totalStaked = 100;
+    s->stakerCount = 1;
+
+    auto out = wp.requestUnstake(user1, 100);
+    EXPECT_EQ(out.returnCode, WOLFPACK_OK);
+    EXPECT_EQ(s->totalStaked, 0ULL);
+    EXPECT_EQ(s->stakerCount, 0ULL);
+    EXPECT_EQ(s->unstakeCount, 1ULL);
+
+    // Staked balance should be removed
+    uint64 val = 0;
+    EXPECT_FALSE(s->stakedBalances.get(user1, val));
+}
+
+TEST(TestWolfPack, RequestUnstakeAlreadyPending)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakedBalances.set(user1, 100);
+    s->totalStaked = 100;
+    s->stakerCount = 1;
+
+    wp.requestUnstake(user1, 50);
+
+    // Second unstake should fail while first is pending
+    // Need to re-stake for this to work - user1 still has 50 staked
+    auto out = wp.requestUnstake(user1, 30);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_UNSTAKE_PENDING);
+}
+
+// ============================================================================
+// Staking - FinalizeUnstake
+// ============================================================================
+
+TEST(TestWolfPack, FinalizeUnstakeNoPending)
+{
+    ContractTestingWP wp;
+
+    auto out = wp.finalizeUnstake(user1);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_NOT_STAKER);
+}
+
+// ============================================================================
+// Staking - Stake blocks while unstake pending
+// ============================================================================
+
+TEST(TestWolfPack, StakeBlockedWhileUnstakePending)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakedBalances.set(user1, 100);
+    s->totalStaked = 100;
+    s->stakerCount = 1;
+
+    wp.requestUnstake(user1, 50);
+
+    auto out = wp.stake(user1, 10);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_UNSTAKE_PENDING);
+}
+
+// ============================================================================
+// Staking - Reward distribution (BEGIN_EPOCH)
+// ============================================================================
+
+TEST(TestWolfPack, StakingRewardDistribution)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    // Set up stakers
+    s->stakedBalances.set(user1, 300);
+    s->stakedBalances.set(user2, 700);
+    s->totalStaked = 1000;
+    s->stakerCount = 2;
+    s->stakingRewardPool = 10000;
+
+    // Trigger reward distribution
+    wp.beginEpoch();
+
+    // Check rewards: user1 gets 300/1000 * 1923076 (but pool only has 10000)
+    // reward = 10000 * 300 / 1000 = 3000 for user1
+    // reward = 10000 * 700 / 1000 = 7000 for user2
+    uint64 reward1 = 0;
+    s->pendingStakingRewards.get(user1, reward1);
+    EXPECT_EQ(reward1, 3000ULL);
+
+    uint64 reward2 = 0;
+    s->pendingStakingRewards.get(user2, reward2);
+    EXPECT_EQ(reward2, 7000ULL);
+
+    EXPECT_EQ(s->stakingRewardPool, 0ULL);
+    EXPECT_EQ(s->totalStakingRewardsDistributed, 10000ULL);
+}
+
+TEST(TestWolfPack, StakingRewardCappedByPool)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakedBalances.set(user1, 1000);
+    s->totalStaked = 1000;
+    s->stakerCount = 1;
+    s->stakingRewardPool = 500; // Less than WOLFPACK_STAKING_REWARD_PER_EPOCH
+
+    wp.beginEpoch();
+
+    uint64 reward = 0;
+    s->pendingStakingRewards.get(user1, reward);
+    EXPECT_EQ(reward, 500ULL);
+    EXPECT_EQ(s->stakingRewardPool, 0ULL);
+}
+
+TEST(TestWolfPack, StakingRewardNoStakers)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakingRewardPool = 10000;
+
+    wp.beginEpoch();
+
+    // Pool should be untouched if no stakers
+    EXPECT_EQ(s->stakingRewardPool, 10000ULL);
+    EXPECT_EQ(s->totalStakingRewardsDistributed, 0ULL);
+}
+
+TEST(TestWolfPack, StakingRewardAccumulates)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakedBalances.set(user1, 1000);
+    s->totalStaked = 1000;
+    s->stakerCount = 1;
+    s->stakingRewardPool = 5000;
+
+    wp.beginEpoch();
+
+    uint64 reward = 0;
+    s->pendingStakingRewards.get(user1, reward);
+    EXPECT_EQ(reward, 5000ULL);
+    EXPECT_EQ(s->stakingRewardPool, 0ULL);
+
+    // Add more to pool and run another epoch
+    s->stakingRewardPool = 3000;
+    wp.beginEpoch();
+
+    reward = 0;
+    s->pendingStakingRewards.get(user1, reward);
+    EXPECT_EQ(reward, 8000ULL); // 5000 + 3000
+    EXPECT_EQ(s->totalStakingRewardsDistributed, 8000ULL);
+}
+
+// ============================================================================
+// Staking - ClaimStakingRewards
+// ============================================================================
+
+TEST(TestWolfPack, ClaimStakingRewardsNoPending)
+{
+    ContractTestingWP wp;
+
+    auto out = wp.claimStakingRewards(user1);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_NO_PENDING_REWARDS);
+}
+
+// ============================================================================
+// Staking - GetStakingInfo
+// ============================================================================
+
+TEST(TestWolfPack, GetStakingInfoComplete)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    s->stakedBalances.set(user1, 500);
+    s->totalStaked = 500;
+    s->stakerCount = 1;
+    s->stakingRewardPool = 2000;
+    s->pendingStakingRewards.set(user1, 100);
+    s->unstakeAmounts.set(user1, 200);
+    s->unstakeEpochs.set(user1, 5);
+
+    auto info = wp.getStakingInfo(user1);
+    EXPECT_EQ(info.isStaker, 1u);
+    EXPECT_EQ(info.stakedAmount, 500ULL);
+    EXPECT_EQ(info.pendingRewards, 100ULL);
+    EXPECT_EQ(info.unstakeAmount, 200ULL);
+    EXPECT_EQ(info.unstakeEpoch, 5ULL);
+    EXPECT_EQ(info.totalStaked, 500ULL);
+    EXPECT_EQ(info.stakingRewardPool, 2000ULL);
+}
+
+// ============================================================================
+// Staking - END_EPOCH cleanup
+// ============================================================================
+
+TEST(TestWolfPack, EndEpochCleansUpStakingMaps)
+{
+    ContractTestingWP wp;
+    auto* s = wp.getState();
+
+    // Add some data
+    s->stakedBalances.set(user1, 100);
+    s->unstakeAmounts.set(user2, 50);
+    s->unstakeEpochs.set(user2, 1);
+    s->pendingStakingRewards.set(user3, 200);
+
+    // Should not crash
+    wp.endEpoch();
+
+    // Data should still be intact after cleanup
+    uint64 val = 0;
+    EXPECT_TRUE(s->stakedBalances.get(user1, val));
+    EXPECT_EQ(val, 100ULL);
 }
