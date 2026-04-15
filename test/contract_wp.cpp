@@ -41,6 +41,9 @@ public:
         initEmptyUniverse();
         INIT_CONTRACT(WOLFPACK);
         callSystemProcedure(WOLFPACK_CONTRACT_INDEX, INITIALIZE);
+        // INITIALIZE sets admin to NULL_ID (originator of system call).
+        // Override it manually for testing.
+        getState()->adminAddress = adminAddr;
     }
 
     WolfPackChecker* getState()
