@@ -44,6 +44,13 @@ public:
         // INITIALIZE sets admin to NULL_ID (originator of system call).
         // Override it manually for testing.
         getState()->adminAddress = adminAddr;
+
+        // Ensure test users exist in spectrum
+        increaseEnergy(adminAddr, 0);
+        increaseEnergy(user1, 0);
+        increaseEnergy(user2, 0);
+        increaseEnergy(user3, 0);
+        increaseEnergy(depositor, 500000);
     }
 
     WolfPackChecker* getState()
@@ -184,7 +191,6 @@ TEST(TestWolfPack, Initialization)
 TEST(TestWolfPack, DepositRevenue)
 {
     ContractTestingWP wp;
-    increaseEnergy(depositor, 500000);
 
     auto out = wp.depositRevenue(depositor, 100000);
     EXPECT_EQ(out.returnCode, WOLFPACK_OK);
@@ -203,7 +209,6 @@ TEST(TestWolfPack, DepositRevenue)
 TEST(TestWolfPack, DepositRevenueZeroFails)
 {
     ContractTestingWP wp;
-    increaseEnergy(depositor, 500000);
 
     auto out = wp.depositRevenue(depositor, 0);
     EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_ZERO_AMOUNT);
@@ -385,7 +390,6 @@ TEST(TestWolfPack, SetExcludeAddress)
 TEST(TestWolfPack, GetStatus)
 {
     ContractTestingWP wp;
-    increaseEnergy(depositor, 500000);
 
     wp.depositRevenue(depositor, 100000);
 
