@@ -45,6 +45,20 @@ constexpr uint64 WOLFPACK_RANK_MULTIPLIER_3 = 2000;
 constexpr uint64 WOLFPACK_RANK_MULTIPLIER_4 = 3000;
 constexpr uint64 WOLFPACK_MAX_RANK = 4;
 
+// Staking constants
+constexpr uint64 WOLFPACK_STAKING_REWARD_PER_EPOCH = 1923076ULL; // ~100M / 52 epochs
+constexpr uint64 WOLFPACK_UNSTAKE_DELAY_EPOCHS = 2;
+constexpr uint16 WOLFPACK_QX_CONTRACT_INDEX = 1;
+
+// Additional error codes
+constexpr uint32 WOLFPACK_ERROR_INSUFFICIENT_STAKE = 8;
+constexpr uint32 WOLFPACK_ERROR_UNSTAKE_PENDING = 9;
+constexpr uint32 WOLFPACK_ERROR_ACQUIRE_FAILED = 10;
+constexpr uint32 WOLFPACK_ERROR_TRANSFER_FAILED = 11;
+constexpr uint32 WOLFPACK_ERROR_NO_PENDING_REWARDS = 12;
+constexpr uint32 WOLFPACK_ERROR_UNSTAKE_NOT_READY = 13;
+constexpr uint32 WOLFPACK_ERROR_NOT_STAKER = 14;
+
 struct WOLFPACK2
 {
 };
@@ -86,6 +100,23 @@ struct WOLFPACK : public ContractBase
         // Exclude addresses from distribution
         id excludeAddress1;
         id excludeAddress2;
+
+        // Staking system
+        HashMap<id, uint64, WOLFPACK_MAX_HOLDERS> stakedBalances;
+        uint64 totalStaked;
+        uint64 stakerCount;
+
+        // Unstake requests
+        HashMap<id, uint64, WOLFPACK_MAX_CLAN_MEMBERS> unstakeAmounts;
+        HashMap<id, uint64, WOLFPACK_MAX_CLAN_MEMBERS> unstakeEpochs;
+        uint64 unstakeCount;
+
+        // Staking reward pool (WP tokens held by SC for distribution)
+        uint64 stakingRewardPool;
+        uint64 totalStakingRewardsDistributed;
+
+        // Pending (unclaimed) staking rewards per user
+        HashMap<id, uint64, WOLFPACK_MAX_HOLDERS> pendingStakingRewards;
     };
 
     // ======================== INPUT / OUTPUT ========================
@@ -109,6 +140,31 @@ struct WOLFPACK : public ContractBase
 
     struct SetExcludeAddress_input { uint64 slot; id address; };
     struct SetExcludeAddress_output { uint32 returnCode; };
+
+    // Staking I/O
+    struct Stake_input { uint64 numberOfShares; };
+    struct Stake_output { uint32 returnCode; };
+    struct Stake_locals { sint64 acquireResult; uint64 existingStake; };
+
+    struct RequestUnstake_input { uint64 numberOfShares; };
+    struct RequestUnstake_output { uint32 returnCode; };
+    struct RequestUnstake_locals { uint64 currentStake; };
+
+    struct FinalizeUnstake_input { };
+    struct FinalizeUnstake_output { uint32 returnCode; };
+    struct FinalizeUnstake_locals { uint64 unstakeAmount; uint64 unstakeEpoch; sint64 releaseResult; };
+
+    struct DepositStakingRewards_input { uint64 numberOfShares; };
+    struct DepositStakingRewards_output { uint32 returnCode; };
+    struct DepositStakingRewards_locals { sint64 acquireResult; sint64 transferResult; };
+
+    struct ClaimStakingRewards_input { };
+    struct ClaimStakingRewards_output { uint32 returnCode; uint64 claimedAmount; };
+    struct ClaimStakingRewards_locals { uint64 pending; sint64 transferResult; sint64 releaseResult; };
+
+    struct GetStakingInfo_input { id stakerAddress; };
+    struct GetStakingInfo_output { uint64 stakedAmount; uint64 pendingRewards; uint64 unstakeAmount; uint64 unstakeEpoch; uint64 totalStaked; uint64 stakingRewardPool; uint32 isStaker; };
+    struct GetStakingInfo_locals { uint64 val; };
 
     struct GetStatus_input { };
     struct GetStatus_output
@@ -182,6 +238,27 @@ struct WOLFPACK : public ContractBase
         {
             output.rank = locals.val;
         }
+    }
+
+    PUBLIC_FUNCTION_WITH_LOCALS(GetStakingInfo)
+    {
+        output.isStaker = state.get().stakedBalances.get(input.stakerAddress, locals.val) ? 1 : 0;
+        if (output.isStaker)
+        {
+            output.stakedAmount = locals.val;
+        }
+        locals.val = 0;
+        state.get().pendingStakingRewards.get(input.stakerAddress, locals.val);
+        output.pendingRewards = locals.val;
+        locals.val = 0;
+        if (state.get().unstakeAmounts.get(input.stakerAddress, locals.val))
+        {
+            output.unstakeAmount = locals.val;
+            state.get().unstakeEpochs.get(input.stakerAddress, locals.val);
+            output.unstakeEpoch = locals.val;
+        }
+        output.totalStaked = state.get().totalStaked;
+        output.stakingRewardPool = state.get().stakingRewardPool;
     }
 
     // ======================== PROCEDURES (state-modifying) ========================
@@ -322,6 +399,160 @@ struct WOLFPACK : public ContractBase
         output.returnCode = WOLFPACK_OK;
     }
 
+    // ======================== STAKING PROCEDURES ========================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(Stake)
+    {
+        if (input.numberOfShares == 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_ZERO_AMOUNT;
+            return;
+        }
+        if (state.get().unstakeAmounts.contains(qpi.invocator()))
+        {
+            output.returnCode = WOLFPACK_ERROR_UNSTAKE_PENDING;
+            return;
+        }
+        locals.acquireResult = qpi.acquireShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
+            (sint64)input.numberOfShares, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
+        if (locals.acquireResult < 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_ACQUIRE_FAILED;
+            return;
+        }
+
+        locals.existingStake = 0;
+        state.get().stakedBalances.get(qpi.invocator(), locals.existingStake);
+        state.mut().stakedBalances.set(qpi.invocator(), locals.existingStake + input.numberOfShares);
+        if (locals.existingStake == 0)
+        {
+            state.mut().stakerCount = state.get().stakerCount + 1;
+        }
+        state.mut().totalStaked = state.get().totalStaked + input.numberOfShares;
+        output.returnCode = WOLFPACK_OK;
+    }
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(RequestUnstake)
+    {
+        if (input.numberOfShares == 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_ZERO_AMOUNT;
+            return;
+        }
+        if (!state.get().stakedBalances.get(qpi.invocator(), locals.currentStake))
+        {
+            output.returnCode = WOLFPACK_ERROR_NOT_STAKER;
+            return;
+        }
+        if (input.numberOfShares > locals.currentStake)
+        {
+            output.returnCode = WOLFPACK_ERROR_INSUFFICIENT_STAKE;
+            return;
+        }
+        if (state.get().unstakeAmounts.contains(qpi.invocator()))
+        {
+            output.returnCode = WOLFPACK_ERROR_UNSTAKE_PENDING;
+            return;
+        }
+
+        if (input.numberOfShares == locals.currentStake)
+        {
+            state.mut().stakedBalances.removeByKey(qpi.invocator());
+            state.mut().stakerCount = state.get().stakerCount - 1;
+        }
+        else
+        {
+            state.mut().stakedBalances.replace(qpi.invocator(), locals.currentStake - input.numberOfShares);
+        }
+        state.mut().totalStaked = state.get().totalStaked - input.numberOfShares;
+
+        state.mut().unstakeAmounts.set(qpi.invocator(), input.numberOfShares);
+        state.mut().unstakeEpochs.set(qpi.invocator(), qpi.epoch());
+        state.mut().unstakeCount = state.get().unstakeCount + 1;
+        output.returnCode = WOLFPACK_OK;
+    }
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(FinalizeUnstake)
+    {
+        if (!state.get().unstakeAmounts.get(qpi.invocator(), locals.unstakeAmount))
+        {
+            output.returnCode = WOLFPACK_ERROR_NOT_STAKER;
+            return;
+        }
+        state.get().unstakeEpochs.get(qpi.invocator(), locals.unstakeEpoch);
+        if (qpi.epoch() < locals.unstakeEpoch + WOLFPACK_UNSTAKE_DELAY_EPOCHS)
+        {
+            output.returnCode = WOLFPACK_ERROR_UNSTAKE_NOT_READY;
+            return;
+        }
+
+        locals.releaseResult = qpi.releaseShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
+            (sint64)locals.unstakeAmount, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
+        if (locals.releaseResult < 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_TRANSFER_FAILED;
+            return;
+        }
+
+        state.mut().unstakeAmounts.removeByKey(qpi.invocator());
+        state.mut().unstakeEpochs.removeByKey(qpi.invocator());
+        state.mut().unstakeCount = state.get().unstakeCount - 1;
+        output.returnCode = WOLFPACK_OK;
+    }
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(DepositStakingRewards)
+    {
+        if (input.numberOfShares == 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_ZERO_AMOUNT;
+            return;
+        }
+        locals.acquireResult = qpi.acquireShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
+            (sint64)input.numberOfShares, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
+        if (locals.acquireResult < 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_ACQUIRE_FAILED;
+            return;
+        }
+
+        locals.transferResult = qpi.transferShareOwnershipAndPossession(
+            WOLFPACK_SC_ASSET_NAME, state.get().wpToken.issuer,
+            qpi.invocator(), qpi.invocator(), (sint64)input.numberOfShares, SELF);
+        if (locals.transferResult < 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_TRANSFER_FAILED;
+            return;
+        }
+
+        state.mut().stakingRewardPool = state.get().stakingRewardPool + input.numberOfShares;
+        output.returnCode = WOLFPACK_OK;
+    }
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(ClaimStakingRewards)
+    {
+        if (!state.get().pendingStakingRewards.get(qpi.invocator(), locals.pending) || locals.pending == 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_NO_PENDING_REWARDS;
+            return;
+        }
+
+        locals.transferResult = qpi.transferShareOwnershipAndPossession(
+            WOLFPACK_SC_ASSET_NAME, state.get().wpToken.issuer,
+            SELF, SELF, (sint64)locals.pending, qpi.invocator());
+        if (locals.transferResult < 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_TRANSFER_FAILED;
+            return;
+        }
+
+        locals.releaseResult = qpi.releaseShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
+            (sint64)locals.pending, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
+
+        state.mut().pendingStakingRewards.removeByKey(qpi.invocator());
+        output.claimedAmount = locals.pending;
+        output.returnCode = WOLFPACK_OK;
+    }
+
     // ======================== REGISTRATION ========================
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
@@ -337,6 +568,13 @@ struct WOLFPACK : public ContractBase
         REGISTER_USER_PROCEDURE(SetClanRank, 4);
         REGISTER_USER_PROCEDURE(SetAdmin, 5);
         REGISTER_USER_PROCEDURE(SetExcludeAddress, 6);
+        REGISTER_USER_PROCEDURE(Stake, 7);
+        REGISTER_USER_PROCEDURE(RequestUnstake, 8);
+        REGISTER_USER_PROCEDURE(FinalizeUnstake, 9);
+        REGISTER_USER_PROCEDURE(DepositStakingRewards, 10);
+        REGISTER_USER_PROCEDURE(ClaimStakingRewards, 11);
+
+        REGISTER_USER_FUNCTION(GetStakingInfo, 5);
     }
 
     // ======================== SYSTEM PROCEDURES ========================
@@ -368,6 +606,13 @@ struct WOLFPACK : public ContractBase
         state.mut().lastPayoutTick = 0;
         state.mut().excludeAddress1 = NULL_ID;
         state.mut().excludeAddress2 = NULL_ID;
+
+        // Staking
+        state.mut().totalStaked = 0;
+        state.mut().stakerCount = 0;
+        state.mut().unstakeCount = 0;
+        state.mut().stakingRewardPool = 0;
+        state.mut().totalStakingRewardsDistributed = 0;
     }
 
     // Snapshot WP token holders AND SC shareholders at the start of each epoch
@@ -379,6 +624,14 @@ struct WOLFPACK : public ContractBase
         uint64 balance;
         id holder;
         uint64 existingBalance;
+        // Staking reward distribution
+        sint64 stakingIdx;
+        uint64 rewardThisEpoch;
+        uint64 stakerTokens;
+        uint64 stakerReward;
+        uint64 existingReward;
+        uint64 quotient;
+        uint64 remainder;
     };
     BEGIN_EPOCH_WITH_LOCALS()
     {
@@ -449,6 +702,36 @@ struct WOLFPACK : public ContractBase
                 }
             }
         }
+
+        // ---- Staking reward distribution ----
+        locals.rewardThisEpoch = WOLFPACK_STAKING_REWARD_PER_EPOCH;
+        if (locals.rewardThisEpoch > state.get().stakingRewardPool)
+        {
+            locals.rewardThisEpoch = state.get().stakingRewardPool;
+        }
+        if (locals.rewardThisEpoch > 0 && state.get().totalStaked > 0)
+        {
+            locals.stakingIdx = NULL_INDEX;
+            while (true)
+            {
+                locals.stakingIdx = state.get().stakedBalances.nextElementIndex(locals.stakingIdx);
+                if (locals.stakingIdx == NULL_INDEX) break;
+                locals.holder = state.get().stakedBalances.key(locals.stakingIdx);
+                locals.stakerTokens = state.get().stakedBalances.value(locals.stakingIdx);
+                if (locals.stakerTokens == 0) continue;
+
+                locals.quotient = div(locals.rewardThisEpoch, state.get().totalStaked);
+                locals.remainder = mod(locals.rewardThisEpoch, state.get().totalStaked);
+                locals.stakerReward = locals.quotient * locals.stakerTokens + div(locals.remainder * locals.stakerTokens, state.get().totalStaked);
+                if (locals.stakerReward == 0) continue;
+
+                locals.existingReward = 0;
+                state.get().pendingStakingRewards.get(locals.holder, locals.existingReward);
+                state.mut().pendingStakingRewards.set(locals.holder, locals.existingReward + locals.stakerReward);
+            }
+            state.mut().stakingRewardPool = state.get().stakingRewardPool - locals.rewardThisEpoch;
+            state.mut().totalStakingRewardsDistributed = state.get().totalStakingRewardsDistributed + locals.rewardThisEpoch;
+        }
     }
 
     END_EPOCH()
@@ -456,6 +739,10 @@ struct WOLFPACK : public ContractBase
         state.mut().holderBalances.cleanupIfNeeded();
         state.mut().shareholderBalances.cleanupIfNeeded();
         state.mut().clanRanks.cleanupIfNeeded();
+        state.mut().stakedBalances.cleanupIfNeeded();
+        state.mut().unstakeAmounts.cleanupIfNeeded();
+        state.mut().unstakeEpochs.cleanupIfNeeded();
+        state.mut().pendingStakingRewards.cleanupIfNeeded();
     }
 
     BEGIN_TICK()
