@@ -40,6 +40,7 @@ add_executable(
    		contract_qutil.cpp
    		contract_qvault.cpp
    		contract_qx.cpp
+   		contract_wp.cpp
    		contract_rl.cpp
    		contract_testex.cpp
    		custom_mining.cpp
