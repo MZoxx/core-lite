@@ -37,13 +37,15 @@ constexpr uint32 WOLFPACK_ERROR_ALREADY_CLAN_MEMBER = 5;
 constexpr uint32 WOLFPACK_ERROR_INVALID_RANK = 6;
 constexpr uint32 WOLFPACK_ERROR_NO_REWARD = 7;
 
-// Rank multipliers (in permille: 1000 = 1x, 1200 = 1.2x, etc.)
-constexpr uint64 WOLFPACK_RANK_MULTIPLIER_0 = 1000;
-constexpr uint64 WOLFPACK_RANK_MULTIPLIER_1 = 1200;
-constexpr uint64 WOLFPACK_RANK_MULTIPLIER_2 = 1500;
-constexpr uint64 WOLFPACK_RANK_MULTIPLIER_3 = 2000;
-constexpr uint64 WOLFPACK_RANK_MULTIPLIER_4 = 3000;
-constexpr uint64 WOLFPACK_MAX_RANK = 4;
+// Rank multipliers (in permille: 1000 = 1.0x)
+// Rank 0 = Recruit, 1 = Private, 2 = Sergeant, 3 = Lieutenant, 4 = Colonel, 5 = General
+constexpr uint64 WOLFPACK_RANK_MULTIPLIER_0 = 1000;  // 1.0x Recruit
+constexpr uint64 WOLFPACK_RANK_MULTIPLIER_1 = 1300;  // 1.3x Private
+constexpr uint64 WOLFPACK_RANK_MULTIPLIER_2 = 1800;  // 1.8x Sergeant
+constexpr uint64 WOLFPACK_RANK_MULTIPLIER_3 = 2500;  // 2.5x Lieutenant
+constexpr uint64 WOLFPACK_RANK_MULTIPLIER_4 = 3200;  // 3.2x Colonel
+constexpr uint64 WOLFPACK_RANK_MULTIPLIER_5 = 4000;  // 4.0x General
+constexpr uint64 WOLFPACK_MAX_RANK = 5;
 
 // Staking constants
 constexpr uint64 WOLFPACK_STAKING_REWARD_PER_EPOCH = 1923076ULL; // ~100M / 52 epochs
@@ -301,6 +303,7 @@ struct WOLFPACK : public ContractBase
         if (input.rank == 2) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_2;
         if (input.rank == 3) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_3;
         if (input.rank == 4) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_4;
+        if (input.rank == 5) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_5;
 
         output.returnCode = WOLFPACK_OK;
     }
@@ -323,6 +326,7 @@ struct WOLFPACK : public ContractBase
         if (locals.rank == 2) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_2;
         if (locals.rank == 3) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_3;
         if (locals.rank == 4) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_4;
+        if (locals.rank == 5) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_5;
 
         state.mut().clanRanks.removeByKey(input.memberAddress);
         state.mut().clanMemberCount = state.get().clanMemberCount - 1;
@@ -353,6 +357,7 @@ struct WOLFPACK : public ContractBase
         if (locals.oldRank == 2) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_2;
         if (locals.oldRank == 3) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_3;
         if (locals.oldRank == 4) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_4;
+        if (locals.oldRank == 5) state.mut().clanWeightedTotal = state.get().clanWeightedTotal - WOLFPACK_RANK_MULTIPLIER_5;
 
         state.mut().clanRanks.replace(input.memberAddress, input.rank);
 
@@ -361,6 +366,7 @@ struct WOLFPACK : public ContractBase
         if (input.rank == 2) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_2;
         if (input.rank == 3) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_3;
         if (input.rank == 4) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_4;
+        if (input.rank == 5) state.mut().clanWeightedTotal = state.get().clanWeightedTotal + WOLFPACK_RANK_MULTIPLIER_5;
 
         output.returnCode = WOLFPACK_OK;
     }
@@ -877,6 +883,7 @@ struct WOLFPACK : public ContractBase
                 if (locals.rank == 2) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_2;
                 if (locals.rank == 3) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_3;
                 if (locals.rank == 4) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_4;
+                if (locals.rank == 5) locals.multiplier = WOLFPACK_RANK_MULTIPLIER_5;
 
                 locals.quotient = div(locals.clanShare, state.get().clanWeightedTotal);
                 locals.remainder = mod(locals.clanShare, state.get().clanWeightedTotal);

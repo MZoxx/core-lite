@@ -20,6 +20,7 @@ public:
             if (rank == 2) expectedWeight += WOLFPACK_RANK_MULTIPLIER_2;
             if (rank == 3) expectedWeight += WOLFPACK_RANK_MULTIPLIER_3;
             if (rank == 4) expectedWeight += WOLFPACK_RANK_MULTIPLIER_4;
+            if (rank == 5) expectedWeight += WOLFPACK_RANK_MULTIPLIER_5;
         }
         EXPECT_EQ(clanWeightedTotal, expectedWeight);
     }
@@ -306,7 +307,7 @@ TEST(TestWolfPack, AddClanMemberInvalidRank)
 {
     ContractTestingWP wp;
 
-    auto out = wp.addClanMember(adminAddr, user1, 5);
+    auto out = wp.addClanMember(adminAddr, user1, 6);
     EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_INVALID_RANK);
 }
 
@@ -370,7 +371,7 @@ TEST(TestWolfPack, SetClanRankInvalidRank)
     ContractTestingWP wp;
 
     wp.addClanMember(adminAddr, user1, 0);
-    auto out = wp.setClanRank(adminAddr, user1, 5);
+    auto out = wp.setClanRank(adminAddr, user1, 6);
     EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_INVALID_RANK);
 }
 
