@@ -42,8 +42,8 @@ public:
         initEmptyUniverse();
         INIT_CONTRACT(WOLFPACK);
         callSystemProcedure(WOLFPACK_CONTRACT_INDEX, INITIALIZE);
-        // INITIALIZE sets admin to NULL_ID (originator of system call).
-        // Override it manually for testing.
+        // After INITIALIZE, adminAddress is NULL_ID (bootstrap mode by design).
+        // Set admin explicitly for tests that require admin-only procedures.
         getState()->adminAddress = adminAddr;
 
         // Ensure test users exist in spectrum
@@ -407,6 +407,23 @@ TEST(TestWolfPack, SetAdminAccessDenied)
     EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_ACCESS_DENIED);
 }
 
+TEST(TestWolfPack, SetAdminBootstrap)
+{
+    ContractTestingWP wp;
+
+    // Reset to NULL_ID to simulate fresh deployment (bootstrap state)
+    wp.getState()->adminAddress = id{};
+
+    // Any user can claim admin when adminAddress is NULL_ID
+    auto out = wp.setAdmin(user1, user1);
+    EXPECT_EQ(out.returnCode, WOLFPACK_OK);
+    EXPECT_EQ(wp.getState()->adminAddress, user1);
+
+    // Second user can no longer hijack admin (user1 is now admin)
+    out = wp.setAdmin(user2, user2);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_ACCESS_DENIED);
+}
+
 // ============================================================================
 // Exclude addresses
 // ============================================================================
@@ -515,12 +532,23 @@ TEST(TestWolfPack, StakeZeroFails)
     EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_ZERO_AMOUNT);
 }
 
+TEST(TestWolfPack, StakeInsufficientSharesUnderManagement)
+{
+    ContractTestingWP wp;
+
+    // user1 has no WP shares under WP's management in empty universe
+    // -> numberOfPossessedShares returns 0, stake must fail
+    auto out = wp.stake(user1, 100);
+    EXPECT_EQ(out.returnCode, WOLFPACK_ERROR_ACQUIRE_FAILED);
+}
+
 TEST(TestWolfPack, StakeStateTracking)
 {
     ContractTestingWP wp;
     auto* s = wp.getState();
 
-    // Simulate staking by directly setting state (acquireShares needs real universe)
+    // Simulate staking by directly setting state
+    // (real flow requires prior QX.TransferShareManagementRights to give WP management rights)
     s->stakedBalances.set(user1, 100);
     s->totalStaked = 100;
     s->stakerCount = 1;

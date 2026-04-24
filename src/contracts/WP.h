@@ -51,6 +51,7 @@ constexpr uint64 WOLFPACK_MAX_RANK = 5;
 constexpr uint64 WOLFPACK_STAKING_REWARD_PER_EPOCH = 1923076ULL; // ~100M / 52 epochs
 constexpr uint64 WOLFPACK_UNSTAKE_DELAY_EPOCHS = 2;
 constexpr uint16 WOLFPACK_QX_CONTRACT_INDEX = 1;
+constexpr sint64 WOLFPACK_QX_TRANSFER_FEE = 100LL; // QX fee for management rights transfer
 
 // Additional error codes
 constexpr uint32 WOLFPACK_ERROR_INSUFFICIENT_STAKE = 8;
@@ -146,7 +147,7 @@ struct WOLFPACK : public ContractBase
     // Staking I/O
     struct Stake_input { uint64 numberOfShares; };
     struct Stake_output { uint32 returnCode; };
-    struct Stake_locals { sint64 acquireResult; uint64 existingStake; };
+    struct Stake_locals { uint64 existingStake; };
 
     struct RequestUnstake_input { uint64 numberOfShares; };
     struct RequestUnstake_output { uint32 returnCode; };
@@ -158,7 +159,7 @@ struct WOLFPACK : public ContractBase
 
     struct DepositStakingRewards_input { uint64 numberOfShares; };
     struct DepositStakingRewards_output { uint32 returnCode; };
-    struct DepositStakingRewards_locals { sint64 acquireResult; sint64 transferResult; };
+    struct DepositStakingRewards_locals { sint64 transferResult; };
 
     struct ClaimStakingRewards_input { };
     struct ClaimStakingRewards_output { uint32 returnCode; uint64 claimedAmount; };
@@ -373,7 +374,8 @@ struct WOLFPACK : public ContractBase
 
     PUBLIC_PROCEDURE(SetAdmin)
     {
-        if (qpi.invocator() != state.get().adminAddress)
+        // Allow bootstrap: first call is free when adminAddress is still NULL_ID after deployment
+        if (qpi.invocator() != state.get().adminAddress && state.get().adminAddress != NULL_ID)
         {
             output.returnCode = WOLFPACK_ERROR_ACCESS_DENIED;
             return;
@@ -419,9 +421,10 @@ struct WOLFPACK : public ContractBase
             output.returnCode = WOLFPACK_ERROR_UNSTAKE_PENDING;
             return;
         }
-        locals.acquireResult = qpi.acquireShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
-            (sint64)input.numberOfShares, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
-        if (locals.acquireResult < 0)
+        // Verify invocator has enough WP shares already under WP's management.
+        // User must call QX.TransferShareManagementRights(asset=wpToken, shares=N, newMgmtIdx=WP) first.
+        if (qpi.numberOfPossessedShares(state.get().wpToken.assetName, state.get().wpToken.issuer,
+            qpi.invocator(), qpi.invocator(), SELF_INDEX, SELF_INDEX) < (sint64)input.numberOfShares)
         {
             output.returnCode = WOLFPACK_ERROR_ACQUIRE_FAILED;
             return;
@@ -493,7 +496,7 @@ struct WOLFPACK : public ContractBase
         }
 
         locals.releaseResult = qpi.releaseShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
-            (sint64)locals.unstakeAmount, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
+            (sint64)locals.unstakeAmount, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_TRANSFER_FEE);
         if (locals.releaseResult < 0)
         {
             output.returnCode = WOLFPACK_ERROR_TRANSFER_FAILED;
@@ -513,9 +516,10 @@ struct WOLFPACK : public ContractBase
             output.returnCode = WOLFPACK_ERROR_ZERO_AMOUNT;
             return;
         }
-        locals.acquireResult = qpi.acquireShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
-            (sint64)input.numberOfShares, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
-        if (locals.acquireResult < 0)
+        // Verify invocator has enough WP shares under WP's management.
+        // User must call QX.TransferShareManagementRights(asset=wpToken, newMgmtIdx=WP) first.
+        if (qpi.numberOfPossessedShares(state.get().wpToken.assetName, state.get().wpToken.issuer,
+            qpi.invocator(), qpi.invocator(), SELF_INDEX, SELF_INDEX) < (sint64)input.numberOfShares)
         {
             output.returnCode = WOLFPACK_ERROR_ACQUIRE_FAILED;
             return;
@@ -552,7 +556,12 @@ struct WOLFPACK : public ContractBase
         }
 
         locals.releaseResult = qpi.releaseShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
-            (sint64)locals.pending, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
+            (sint64)locals.pending, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_TRANSFER_FEE);
+        if (locals.releaseResult < 0)
+        {
+            output.returnCode = WOLFPACK_ERROR_TRANSFER_FAILED;
+            return;
+        }
 
         state.mut().pendingStakingRewards.removeByKey(qpi.invocator());
         output.claimedAmount = locals.pending;
@@ -587,7 +596,7 @@ struct WOLFPACK : public ContractBase
 
     INITIALIZE()
     {
-        state.mut().adminAddress = qpi.originator();
+        // adminAddress stays NULL_ID; deployer must call SetAdmin in construction epoch (bootstrap)
 
         // WP token (external, issued on QX by MLMWPS...)
         state.mut().wpToken.issuer = ID(
@@ -717,11 +726,10 @@ struct WOLFPACK : public ContractBase
         }
         if (locals.rewardThisEpoch > 0 && state.get().totalStaked > 0)
         {
-            locals.stakingIdx = NULL_INDEX;
-            while (true)
+            for (locals.stakingIdx = state.get().stakedBalances.nextElementIndex(NULL_INDEX);
+                 locals.stakingIdx != NULL_INDEX;
+                 locals.stakingIdx = state.get().stakedBalances.nextElementIndex(locals.stakingIdx))
             {
-                locals.stakingIdx = state.get().stakedBalances.nextElementIndex(locals.stakingIdx);
-                if (locals.stakingIdx == NULL_INDEX) break;
                 locals.holder = state.get().stakedBalances.key(locals.stakingIdx);
                 locals.stakerTokens = state.get().stakedBalances.value(locals.stakingIdx);
                 if (locals.stakerTokens == 0) continue;
@@ -810,11 +818,10 @@ struct WOLFPACK : public ContractBase
         // --- Step 2: Push 70% to WP token holders ---
         if (locals.holderShare > 0 && state.get().totalTokensSnapshot > 0)
         {
-            locals.idx = NULL_INDEX;
-            while (true)
+            for (locals.idx = state.get().holderBalances.nextElementIndex(NULL_INDEX);
+                 locals.idx != NULL_INDEX;
+                 locals.idx = state.get().holderBalances.nextElementIndex(locals.idx))
             {
-                locals.idx = state.get().holderBalances.nextElementIndex(locals.idx);
-                if (locals.idx == NULL_INDEX) break;
                 locals.holder = state.get().holderBalances.key(locals.idx);
                 locals.tokens = state.get().holderBalances.value(locals.idx);
                 if (locals.tokens == 0) continue;
@@ -840,11 +847,10 @@ struct WOLFPACK : public ContractBase
                 locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
             }
 
-            locals.idx = NULL_INDEX;
-            while (true)
+            for (locals.idx = state.get().shareholderBalances.nextElementIndex(NULL_INDEX);
+                 locals.idx != NULL_INDEX;
+                 locals.idx = state.get().shareholderBalances.nextElementIndex(locals.idx))
             {
-                locals.idx = state.get().shareholderBalances.nextElementIndex(locals.idx);
-                if (locals.idx == NULL_INDEX) break;
                 locals.holder = state.get().shareholderBalances.key(locals.idx);
                 locals.tokens = state.get().shareholderBalances.value(locals.idx);
                 if (locals.tokens == 0) continue;
@@ -870,11 +876,10 @@ struct WOLFPACK : public ContractBase
                 locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
             }
 
-            locals.idx = NULL_INDEX;
-            while (true)
+            for (locals.idx = state.get().clanRanks.nextElementIndex(NULL_INDEX);
+                 locals.idx != NULL_INDEX;
+                 locals.idx = state.get().clanRanks.nextElementIndex(locals.idx))
             {
-                locals.idx = state.get().clanRanks.nextElementIndex(locals.idx);
-                if (locals.idx == NULL_INDEX) break;
                 locals.holder = state.get().clanRanks.key(locals.idx);
                 locals.rank = state.get().clanRanks.value(locals.idx);
 
@@ -895,6 +900,19 @@ struct WOLFPACK : public ContractBase
                 locals.contractBalance = locals.contractBalance - locals.reward;
                 if (locals.contractBalance == 0) break;
             }
+        }
+    }
+
+    PRE_ACQUIRE_SHARES()
+    {
+        // Accept management rights transfer from QX for WP tokens only.
+        // This enables users to stake by first calling QX.TransferShareManagementRights.
+        if (input.asset.assetName == state.get().wpToken.assetName
+            && input.asset.issuer == state.get().wpToken.issuer
+            && input.otherContractIndex == WOLFPACK_QX_CONTRACT_INDEX)
+        {
+            output.allowTransfer = true;
+            output.requestedFee = 0;
         }
     }
 };
