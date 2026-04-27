@@ -9,7 +9,7 @@
 
 // Do NOT share the data of "Private Settings" section with anybody!!!
 
-static std::string OPERATOR = "SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN";
+static std::string OPERATOR = "WIYVZEQZEOBACHHGYWMLMVXJWVMCUQXJJUKJNSKSTEWJXYTHAJHTNRAENCUH";
 
 static unsigned char computorSeeds[][55 + 1] = {
 "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv",
