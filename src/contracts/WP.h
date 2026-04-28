@@ -1,16 +1,26 @@
 using namespace QPI;
 
 // ============================================================================
-// WolfPack (WP) - Revenue Distribution Smart Contract
+// WolfPack (WP) - Revenue Distribution & Staking Smart Contract
 //
-// Revenue split:
-//   70% -> WP token holders (proportional to token holdings)
-//   10% -> SC shareholders (676 SC shareholders, issuer=NULL_ID)
-//   10% -> Active clan members (rank multiplier booster)
-//   10% -> Reinvestment fund
+// --- Revenue Payout (triggered daily at 11:00 UTC via END_TICK) ---
 //
-// WP token holders are snapshotted at BEGIN_EPOCH via AssetPossessionIterator.
-// SC shareholders (IPO shares) are also snapshotted at BEGIN_EPOCH separately.
+//   Revenue split:
+//     70% -> WP token holders (proportional to token holdings)
+//     10% -> SC shareholders (676 IPO shares, issuer=NULL_ID)
+//     10% -> Active clan members (weighted by rank multiplier)
+//     10% -> Reinvestment fund (held in contract)
+//
+//   WP token holders are snapshotted at BEGIN_EPOCH via AssetPossessionIterator.
+//   SC shareholders (IPO shares) are also snapshotted at BEGIN_EPOCH separately.
+//
+// --- Staking ---
+//
+//   WP holders can stake their tokens into the contract.
+//   Each epoch a fixed reward (WOLFPACK_STAKING_REWARD_PER_EPOCH) is distributed
+//   proportionally among stakers from the staking reward pool.
+//   Unstaking requires a delay of WOLFPACK_UNSTAKE_DELAY_EPOCHS epochs.
+//   Accumulated staking rewards can be claimed at any time via ClaimStakingRewards.
 // ============================================================================
 
 // --- Constants ---
@@ -61,10 +71,6 @@ constexpr uint32 WOLFPACK_ERROR_TRANSFER_FAILED = 11;
 constexpr uint32 WOLFPACK_ERROR_NO_PENDING_REWARDS = 12;
 constexpr uint32 WOLFPACK_ERROR_UNSTAKE_NOT_READY = 13;
 constexpr uint32 WOLFPACK_ERROR_NOT_STAKER = 14;
-
-struct WOLFPACK2
-{
-};
 
 struct WOLFPACK : public ContractBase
 {
@@ -163,7 +169,7 @@ struct WOLFPACK : public ContractBase
 
     struct ClaimStakingRewards_input { };
     struct ClaimStakingRewards_output { uint32 returnCode; uint64 claimedAmount; };
-    struct ClaimStakingRewards_locals { uint64 pending; sint64 transferResult; sint64 releaseResult; };
+    struct ClaimStakingRewards_locals { uint64 pending; sint64 releaseResult; };
 
     struct GetStakingInfo_input { id stakerAddress; };
     struct GetStakingInfo_output { uint64 stakedAmount; uint64 pendingRewards; uint64 unstakeAmount; uint64 unstakeEpoch; uint64 totalStaked; uint64 stakingRewardPool; uint32 isStaker; };
@@ -525,15 +531,6 @@ struct WOLFPACK : public ContractBase
             return;
         }
 
-        locals.transferResult = qpi.transferShareOwnershipAndPossession(
-            WOLFPACK_SC_ASSET_NAME, state.get().wpToken.issuer,
-            qpi.invocator(), qpi.invocator(), (sint64)input.numberOfShares, SELF);
-        if (locals.transferResult < 0)
-        {
-            output.returnCode = WOLFPACK_ERROR_TRANSFER_FAILED;
-            return;
-        }
-
         state.mut().stakingRewardPool = state.get().stakingRewardPool + input.numberOfShares;
         output.returnCode = WOLFPACK_OK;
     }
@@ -546,10 +543,9 @@ struct WOLFPACK : public ContractBase
             return;
         }
 
-        locals.transferResult = qpi.transferShareOwnershipAndPossession(
-            WOLFPACK_SC_ASSET_NAME, state.get().wpToken.issuer,
-            SELF, SELF, (sint64)locals.pending, qpi.invocator());
-        if (locals.transferResult < 0)
+        locals.releaseResult = qpi.releaseShares(state.get().wpToken, qpi.invocator(), qpi.invocator(),
+            (sint64)locals.pending, WOLFPACK_QX_CONTRACT_INDEX, WOLFPACK_QX_CONTRACT_INDEX, 0);
+        if (locals.releaseResult < 0)
         {
             output.returnCode = WOLFPACK_ERROR_TRANSFER_FAILED;
             return;

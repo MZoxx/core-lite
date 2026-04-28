@@ -9,11 +9,10 @@ public:
     void checkClanWeightConsistency()
     {
         uint64 expectedWeight = 0;
-        sint64 idx = NULL_INDEX;
-        while (true)
+        for (sint64 idx = clanRanks.nextElementIndex(NULL_INDEX);
+             idx != NULL_INDEX;
+             idx = clanRanks.nextElementIndex(idx))
         {
-            idx = clanRanks.nextElementIndex(idx);
-            if (idx == NULL_INDEX) break;
             uint64 rank = clanRanks.value(idx);
             if (rank == 0) expectedWeight += WOLFPACK_RANK_MULTIPLIER_0;
             if (rank == 1) expectedWeight += WOLFPACK_RANK_MULTIPLIER_1;
