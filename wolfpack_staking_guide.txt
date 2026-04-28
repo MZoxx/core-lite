@@ -1,0 +1,73 @@
+## 🐺 WolfPack Staking — Simple Guide
+
+---
+
+### What is it?
+Stake your **WP tokens** to earn passive rewards every week.
+The reward pool pays out **~1,923,076 WP per epoch** to all stakers — proportional to how much you staked.
+
+---
+
+### 📥 How to Stake
+
+**1.** Go to **QX** and call:
+`TransferShareManagementRights → asset: WP, shares: 100, newMgmtIdx: 27`
+> This hands your WP tokens over to the WP contract to manage.
+
+**2.** Then on the **WP contract** call:
+`Stake → numberOfShares: 100`
+> Done! Your tokens are now staking.
+
+---
+
+### 💰 Getting Your Rewards
+
+Rewards are **calculated automatically** at the start of every epoch (weekly).
+To actually receive them, call:
+`ClaimStakingRewards`
+> Your WP tokens land in your wallet. A 100 QU fee is charged by QX.
+
+---
+
+### 🔓 How to Unstake
+
+**1.** Call: `RequestUnstake → numberOfShares: 100`
+> Your tokens stop earning rewards immediately.
+
+**2.** Wait **2 epochs**.
+
+**3.** Call: `FinalizeUnstake`
+> Your WP tokens are back under QX management (free to trade again). 100 QU fee.
+
+---
+
+### ⚠️ Important
+
+- Always transfer management rights on **QX first** before staking
+- You can't stake while an unstake is in progress
+- Unstake has a **2-epoch cooldown** — no exceptions
+- Every claim and unstake costs **100 QU** (QX network fee)
+
+---
+
+### 📊 Numbers at a Glance
+
+```
+Reward per epoch   →  1,923,076 WP
+Total staking pool →  ~100,000,000 WP
+Duration           →  52 epochs (~1 year)
+Unstake delay      →  2 epochs
+Fee per action     →  100 QU
+```
+
+---
+
+### 🗓️ Example Timeline
+
+```
+Epoch 1   →  Transfer rights on QX + Stake 100 WP
+Epoch 2   →  Auto-payout: you receive ~10% of 1,923,076 WP (if you hold 10% of staked supply)
+Epoch 2   →  Call ClaimStakingRewards → tokens in your wallet
+Epoch 5   →  RequestUnstake
+Epoch 7   →  FinalizeUnstake → tokens free again
+```
