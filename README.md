@@ -1,207 +1,156 @@
-# Qubic Core Lite
+# WolfPack (WP) Smart Contract
 
-[![Build](https://github.com/qubic/core-lite/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/qubic/core-lite/actions/workflows/ci.yml)
+**Contract file:** `src/contracts/WP.h`
+**Network:** Qubic (Core Lite Testnet)
+**Status:** Pre-launch — not yet live on mainnet
 
-The lite version of Qubic Core that can run directly on the OS without a UEFI environment.
+---
 
-[Compare core-lite (develop) vs. core (develop)](https://github.com/qubic/core-lite/compare/develop...qubic:core:develop)
+## Overview
 
-## Menu
+The WolfPack contract has two core features:
 
-- [Qubic Core Lite](#qubic-core-lite)
-  - [Supporting Networks](#supporting-networks)
-  - [Parameters](#parameters)
-  - [Prerequisites](#prerequisites)
-    - [Local Testnet](#local-testnet)
-    - [Mainnet](#mainnet)
-  - [Build Config](#build-config)
-    - [Local Testnet](#local-testnet-1)
-    - [Mainnet](#mainnet-1)
-  - [Build](#build)
-    - [Windows](#windows)
-    - [Linux](#linux)
-  - [Node State](#node-state)
-  - [Ticking](#ticking)
-  - [RPC](#rpc)
-  - [Tips](#tips)
-  - [FAQs](#faqs)
-  - [Command Line Argument](#command-line-argument)
-  - [Supporting Platform](#supporting-platform)
-  - [Donate The Project](#donate-the-project)
+1. **Revenue Distribution** — incoming QU is split and paid out daily to WP token holders, SC shareholders, and clan members
+2. **WP Token Staking** — users stake WP tokens to earn a fixed weekly reward from the staking pool
 
-## Supporting Networks
+---
 
-- [x] Mainnet (Beta)
-- [x] Local Testnet
+## Revenue Distribution
 
-## Parameters
+Revenue sent to the contract via `DepositRevenue` is held as `pendingRevenue` and paid out automatically every day at **11:00 UTC** (via `END_TICK`).
 
-- **Security tick** : `./Qubic --security-tick 32`
-> The security tick temporarily skips verifying your **node’s contract state (computer digest)** against the quorum. Verification is performed only every `--security-tick` interval.
+### Split
 
-- **Ticking delay (local testnet)**: `./Qubic --ticking-delay 1000`
-> If your local testnet ticking too fast, you can slow it down by `--ticking-delay` ms.
+| Pool | Share | Recipients |
+|------|-------|-----------|
+| Token Holders | 70% | WP token holders — proportional to balance |
+| SC Shareholders | 10% | 676 IPO shares (issuer = NULL_ID) — proportional to shares |
+| Clan Members | 10% | Active clan members — weighted by rank multiplier |
+| Reinvestment Fund | 10% | Held inside the contract |
 
-- **Peers**: `./Qubic --peers 1.2.3.4,8.8.8.8`
-> You can add more peers using command line
+### Snapshots
 
-## Prerequisites
+Holder and shareholder balances are **snapshotted at `BEGIN_EPOCH`** via `AssetPossessionIterator`. Payouts use the snapshot — not live balances.
 
-### Local Testnet
+### Payout Timing
 
-To run a qubic **local testnet** node, you need the following spec:
+- Trigger: `END_TICK` when `qpi.hour() == 11` (UTC)
+- Minimum interval: 1000 ticks between payouts (prevents double-payout)
+- Only triggers if `pendingRevenue > 0`
 
-- **16GB** RAM.
+---
 
-> **No initial files are needed** in this version (eg. spectrum, universe, contract,...)
+## Staking
 
-### Mainnet
+### How It Works
 
-To run a qubic **mainnet** node, you need the following spec:
+1. User calls `QX.TransferShareManagementRights` → hands WP shares to the WP contract
+2. User calls `Stake(numberOfShares)` → shares are recorded as staked
+3. At every `BEGIN_EPOCH`, staking rewards are distributed proportionally to all stakers
+4. User calls `ClaimStakingRewards` → WP tokens sent back to wallet (100 QU QX fee)
 
-- High frequency CPU with AVX2/AVX512 support (recommend VCPU AMD 7950x @ 8theads)
-- 1Gb/s synchronous internet connection
-- **64GB** RAM.
-- **500GB** fast SSD disk.
+### Unstaking
 
-> **Initial files are needed** in this version (eg. spectrum, universe, contract,...)
+1. Call `RequestUnstake(numberOfShares)` → tokens stop earning, locked for 2 epochs
+2. Wait **2 epochs**
+3. Call `FinalizeUnstake` → tokens returned to QX management (100 QU fee)
 
-## Build Config
+> ⚠️ You cannot stake while an unstake request is pending.
 
-### Local Testnet
+### Numbers
 
-**Local Testnet Single Node**
+| Parameter | Value |
+|-----------|-------|
+| Reward per epoch | 1,923,076 WP (~100M / 52 epochs) |
+| Unstake delay | 2 epochs |
+| QX fee (claim/unstake) | 100 QU |
+| Max stakers | 16,384 |
 
-In `qubic.cpp`
+---
 
-**1.** Uncomment `// #define TESTNET`
+## Clan System
 
-```cpp
-// #define TESTNET // UNCOMMENT this line if you want to compile for testnet
+Clan members receive 10% of revenue, weighted by rank multiplier.
 
-// this option enables using disk as RAM to reduce hardware requirement for qubic core node
-// it is highly recommended to enable this option if you want to run a full mainnet node on SSD
-// UNCOMMENT this line to enable it
-#define USE_SWAP
-```
+| Rank | Name | Multiplier |
+|------|------|-----------|
+| 0 | Recruit | 1.0× |
+| 1 | Private | 1.3× |
+| 2 | Sergeant | 1.8× |
+| 3 | Lieutenant | 2.5× |
+| 4 | Colonel | 3.2× |
+| 5 | General | 4.0× |
 
-**2.** Build
+Clan members are managed by the admin via `AddClanMember`, `RemoveClanMember`, `SetClanRank`.
 
-**Local Testnet Multiple Nodes**
+---
 
-Afer single node steps please do:
+## Contract Functions
 
-In `private_settings.h`, split the 676 seeds in `broadcastedComputorSeeds` into `computorSeeds` across your nodes (e.g., 300 seeds in node 1, the remaining 376 seeds in node 2):
+### Read-only (Functions)
 
-```c++
-static unsigned char computorSeeds[][55 + 1] = {
-};
-```
+| Function | Description |
+|----------|-------------|
+| `GetStatus` | Contract overview: holder count, pending revenue, last payout, etc. |
+| `GetHolderInfo(address)` | WP token balance in snapshot |
+| `GetShareholderInfo(address)` | SC share balance in snapshot |
+| `GetClanMemberInfo(address)` | Clan rank |
+| `GetStakingInfo(address)` | Staked amount, pending rewards, unstake status |
 
-> **Warning**
-> Do not change the `broadcastedComputorSeeds`.
+### State-modifying (Procedures)
 
-### Mainnet
-
-Make sure you have commented `#define TESTNET`
-
-**1.** Add public peers from https://app.qubic.li/network/live via command line `--peers` (eg. `--peers 15.235.225.233,115.79.212.169`)
-
-**2.** Prepare the epoch files (blockchain state).
-
-They should be named and structured as follows:
-
-```
-./contract0000.XXX
-./contract0001.XXX
-./contract0002.XXX
-./contract0003.XXX
-./contract0004.XXX
-./contract0005.XXX
-./contract0006.XXX
-./contract0007.XXX
-./contract0008.XXX
-./contract0009.XXX
-./contract0010.XXX
-./contract0011.XXX
-./contract00xx.XXX
-./spectrum.XXX
-./universe.XXX
-```
-
-Place all of these files in the same directory where you plan to launch the `Qubic` binary.
-
-**3.** Build
-
-## Build
-
-### Windows
-
-- Open .sln file in project root folder in Visual Studio
-- Change build config to Release -> Right click at Qubic project -> Build
-
-### Linux
-
-Detailed instruction can be found here: [Linux Build Tutorial](./README_CLANG.md)
-
-## Node State
-
-### Local Testnet
-
-- 676 seeds in `broadcastedComputorSeeds` and `customSeeds` each has 10B Qubic.
-
-### Mainnet
-
-Current mainnet state
-
-## Ticking
-
-Press **F12** to switch to **MAIN** mode to make the network start ticking (processing transactions).
-
-## RPC
-
-> This feature only available in Linux!
-
-Qubic Core Lite provides a built-in RPC API that enables developers to interact directly with a Lite node with official RPC style, removing the need for an original complex RPC layer.
-
-### Status
-
-- **RPC Live (OK):** `http://localhost:41841/live/v1`
-- **RPC Stats (OK):** `http://localhost:41841/`
-- **RPC Query V2 (OK):** `http://localhost:41841/query/v1`
-- **RPC Archiver V2:** *Deprecated (not implemented)*
-
-### Documentation
-
-https://qubic.github.io/integration/Partners/swagger/qubic-rpc-doc.html?urls.primaryName=Qubic%20RPC%20Live%20Tree  
-> Remember to select the appropriate API definition for each endpoint.
-
-## Tips
-
-- **For Local Testnet:** Default `PORT` is **31841**, you can change it in `qubic.cpp`
-- **For Local Testnet:** If you want to fund your custom wallet (seed), you can add these into `customSeeds` in `private_settings.h`
-- **For Local Testnet:** An epoch will have `TESTNET_EPOCH_DURATION` (**3000**) ticks by default, you can change it in `public_settings.h`
-- You can deploy your own RPC server to core lite - [how to](https://qubic-sc-docs.pages.dev/rpc/setup-rpc)
-- Change `TICK_STORAGE_AUTOSAVE_MODE` in `private_settings.h` to `1` to enable **Snapshot** mode (your node will start from latest saved snapshot state when crash/restart instead of from scratch)
-
-## FAQs
-
-- **My node stop ticking after restart, why?**
-Delete the **system** file at your current working folder, it may make your node start with wrong state.
-
-## Command Line Argument
-
-| Feature | Syntax | Example Usage | Description |
-| :--- | :--- | :--- | :--- |
-| **Peers** | `--peers` | `--peers 127.0.0.1` | Specifies peer nodes for network connection. |
-| **Security Tick** | `--security-tick` | `--security-tick 32` | Verifies state after every X ticks to reduce the node's computational load. |
-| **Lite Node Operator Alias** | `--operator-alias` | `--operator-alias "MyNode"` | A human-readable name for the lite node operator. |
-| **Lite Node Operator ID (Seed)** | `--operator-seed` | `--operator-seed aaa...aaa` | Used to identify lite node operators in the network (utilized by the **Network Guardian** project). |
-| **Logging Reader Passcode** | `--reader-passcode` | `--reader-passcode 1-2-3-4` | The passcode required to access or read node logs. |
-
-## Supporting Platform
-
-- [x] Windows
-
-- [x] Linux
-
+| Procedure | Description |
+|-----------|-------------|
+| `DepositRevenue` | Send QU to the contract revenue pool |
+| `Stake(numberOfShares)` | Stake WP tokens (management rights must be transferred first via QX) |
+| `RequestUnstake(numberOfShares)` | Begin 2-epoch unstake cooldown |
+| `FinalizeUnstake` | Complete unstake after cooldown (100 QU fee) |
+| `ClaimStakingRewards` | Claim accumulated staking rewards (100 QU fee) |
+| `DepositStakingRewards(numberOfShares)` | Add WP tokens to the staking reward pool |
+| `AddClanMember(address, rank)` | Admin only |
+| `RemoveClanMember(address)` | Admin only |
+| `SetClanRank(address, rank)` | Admin only |
+| `SetAdmin(address)` | Transfer admin (bootstrap: free when admin = NULL_ID) |
+| `SetExcludeAddress(slot, address)` | Exclude address from distributions (slot 1 or 2) |
+
+---
+
+## Token
+
+| Parameter | Value |
+|-----------|-------|
+| Asset name | `WP` |
+| Issuer | `MLMWPSQNVAIBR FDHWCKSFOVUAZDDWKJGCLRSYZIUEFDURPWIPQXACYOE` |
+| Max supply | 100,000,000 WP |
+| IPO shares | 676 (issuer = NULL_ID) |
+
+---
+
+## Admin Setup
+
+`INITIALIZE()` leaves `adminAddress = NULL_ID`.
+The first call to `SetAdmin(newAdmin)` from **any address** sets the admin (bootstrap).
+After that, only the current admin can change it.
+
+---
+
+## Error Codes
+
+| Code | Name |
+|------|------|
+| 0 | OK |
+| 1 | ACCESS_DENIED |
+| 2 | ZERO_AMOUNT |
+| 3 | NOT_HOLDER |
+| 4 | NOT_CLAN_MEMBER |
+| 5 | ALREADY_CLAN_MEMBER |
+| 6 | INVALID_RANK |
+| 7 | NO_REWARD |
+| 8 | INSUFFICIENT_STAKE |
+| 9 | UNSTAKE_PENDING |
+| 10 | ACQUIRE_FAILED |
+| 11 | TRANSFER_FAILED |
+| 12 | NO_PENDING_REWARDS |
+| 13 | UNSTAKE_NOT_READY |
+| 14 | NOT_STAKER |
+| 15 | INVALID_SLOT |
