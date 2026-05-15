@@ -73,6 +73,11 @@ constexpr uint32 WOLFPACK_ERROR_NO_PENDING_REWARDS = 12;
 constexpr uint32 WOLFPACK_ERROR_UNSTAKE_NOT_READY = 13;
 constexpr uint32 WOLFPACK_ERROR_NOT_STAKER = 14;
 
+// Secondary state struct, reserved for future EXPAND events.
+struct WOLFPACK2
+{
+};
+
 struct WOLFPACK : public ContractBase
 {
     // ======================== STATE ========================
@@ -274,9 +279,9 @@ struct WOLFPACK : public ContractBase
     {
         // Use `.low` instead of `(uint64)` cast: uint128_t only has
         // `operator bool()`, so `(uint64)<uint128_t>` collapses to 1.
-        output.holderShare = (((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS) / (uint128)1000ULL).low;
-        output.shareholderShare = (((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS) / (uint128)1000ULL).low;
-        output.clanShare = (((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_CLAN) / (uint128)1000ULL).low;
+        output.holderShare = div((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS, (uint128)1000ULL).low;
+        output.shareholderShare = div((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS, (uint128)1000ULL).low;
+        output.clanShare = div((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_CLAN, (uint128)1000ULL).low;
         output.reinvestShare = input.amount - output.holderShare - output.shareholderShare - output.clanShare;
     }
 
@@ -764,7 +769,7 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.rewardThisEpoch, state.get().totalStaked);
                 locals.remainder = mod(locals.rewardThisEpoch, state.get().totalStaked);
-                locals.stakerReward = locals.quotient * locals.stakerTokens + (((uint128)locals.remainder * (uint128)locals.stakerTokens) / (uint128)state.get().totalStaked).low;
+                locals.stakerReward = locals.quotient * locals.stakerTokens + div((uint128)locals.remainder * (uint128)locals.stakerTokens, (uint128)state.get().totalStaked).low;
                 if (locals.stakerReward == 0) continue;
 
                 locals.existingReward = 0;
@@ -829,9 +834,9 @@ struct WOLFPACK : public ContractBase
 
         // --- Step 1: Split revenue ---
         locals.amount = state.get().pendingRevenue;
-        locals.holderShare = (((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS) / (uint128)1000ULL).low;
-        locals.shareholderShare = (((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS) / (uint128)1000ULL).low;
-        locals.clanShare = (((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_CLAN) / (uint128)1000ULL).low;
+        locals.holderShare = div((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS, (uint128)1000ULL).low;
+        locals.shareholderShare = div((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS, (uint128)1000ULL).low;
+        locals.clanShare = div((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_CLAN, (uint128)1000ULL).low;
         locals.reinvestShare = locals.amount - locals.holderShare - locals.shareholderShare - locals.clanShare;
 
         state.mut().pendingRevenue = 0;
@@ -856,7 +861,7 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.holderShare, state.get().totalTokensSnapshot);
                 locals.remainder = mod(locals.holderShare, state.get().totalTokensSnapshot);
-                locals.reward = locals.quotient * locals.tokens + (((uint128)locals.remainder * (uint128)locals.tokens) / (uint128)state.get().totalTokensSnapshot).low;
+                locals.reward = locals.quotient * locals.tokens + div((uint128)locals.remainder * (uint128)locals.tokens, (uint128)state.get().totalTokensSnapshot).low;
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
@@ -885,7 +890,7 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.shareholderShare, state.get().totalSharesSnapshot);
                 locals.remainder = mod(locals.shareholderShare, state.get().totalSharesSnapshot);
-                locals.reward = locals.quotient * locals.tokens + (((uint128)locals.remainder * (uint128)locals.tokens) / (uint128)state.get().totalSharesSnapshot).low;
+                locals.reward = locals.quotient * locals.tokens + div((uint128)locals.remainder * (uint128)locals.tokens, (uint128)state.get().totalSharesSnapshot).low;
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
@@ -920,7 +925,7 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.clanShare, state.get().clanWeightedTotal);
                 locals.remainder = mod(locals.clanShare, state.get().clanWeightedTotal);
-                locals.reward = locals.quotient * locals.multiplier + (((uint128)locals.remainder * (uint128)locals.multiplier) / (uint128)state.get().clanWeightedTotal).low;
+                locals.reward = locals.quotient * locals.multiplier + div((uint128)locals.remainder * (uint128)locals.multiplier, (uint128)state.get().clanWeightedTotal).low;
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
