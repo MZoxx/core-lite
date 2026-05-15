@@ -9,7 +9,7 @@ using namespace QPI;
 //     70% -> WP token holders (proportional to token holdings)
 //     10% -> SC shareholders (676 IPO shares, issuer=NULL_ID)
 //     10% -> Active clan members (weighted by rank multiplier)
-//     10% -> Reinvestment fund (held in contract)
+//     10% -> Reinvestment address (transferred out each payout)
 //
 //   WP token holders are snapshotted at BEGIN_EPOCH via AssetPossessionIterator.
 //   SC shareholders (IPO shares) are also snapshotted at BEGIN_EPOCH separately.
@@ -101,7 +101,7 @@ struct WOLFPACK : public ContractBase
 
         // Revenue tracking
         uint64 pendingRevenue;
-        uint64 reinvestmentFund;
+        uint64 reinvestmentFund;  // cumulative total sent to reinvestAddress
         uint64 totalDistributed;
         uint64 totalDeposited;
         uint64 lastDistributionEpoch;
@@ -110,6 +110,9 @@ struct WOLFPACK : public ContractBase
         // Exclude addresses from distribution
         id excludeAddress1;
         id excludeAddress2;
+
+        // Recipient of the reinvestment share (10% of each payout)
+        id reinvestAddress;
 
         // Staking system
         HashMap<id, uint64, WOLFPACK_MAX_HOLDERS> stakedBalances;
@@ -184,6 +187,7 @@ struct WOLFPACK : public ContractBase
         uint64 shareholderCount;
         uint64 totalSharesSnapshot;
         uint64 clanMemberCount;
+        uint64 clanWeightedTotal;
         uint64 pendingRevenue;
         uint64 reinvestmentFund;
         uint64 totalDistributed;
@@ -205,6 +209,15 @@ struct WOLFPACK : public ContractBase
     struct GetClanMemberInfo_output { uint64 rank; uint32 isMember; };
     struct GetClanMemberInfo_locals { uint64 val; };
 
+    struct GetExcludeAddresses_input { };
+    struct GetExcludeAddresses_output { id address1; id address2; };
+
+    // BUG-SONDE: returns the split that END_TICK would compute for a given
+    // amount, without executing the transfers. Lets tests verify the
+    // permille arithmetic in isolation from the qpi.transfer step.
+    struct GetDistributionPreview_input { uint64 amount; };
+    struct GetDistributionPreview_output { uint64 holderShare; uint64 shareholderShare; uint64 clanShare; uint64 reinvestShare; };
+
     // ======================== FUNCTIONS (read-only) ========================
 
     PUBLIC_FUNCTION(GetStatus)
@@ -214,6 +227,7 @@ struct WOLFPACK : public ContractBase
         output.shareholderCount = state.get().shareholderCount;
         output.totalSharesSnapshot = state.get().totalSharesSnapshot;
         output.clanMemberCount = state.get().clanMemberCount;
+        output.clanWeightedTotal = state.get().clanWeightedTotal;
         output.pendingRevenue = state.get().pendingRevenue;
         output.reinvestmentFund = state.get().reinvestmentFund;
         output.totalDistributed = state.get().totalDistributed;
@@ -248,6 +262,22 @@ struct WOLFPACK : public ContractBase
         {
             output.rank = locals.val;
         }
+    }
+
+    PUBLIC_FUNCTION(GetExcludeAddresses)
+    {
+        output.address1 = state.get().excludeAddress1;
+        output.address2 = state.get().excludeAddress2;
+    }
+
+    PUBLIC_FUNCTION(GetDistributionPreview)
+    {
+        // Use `.low` instead of `(uint64)` cast: uint128_t only has
+        // `operator bool()`, so `(uint64)<uint128_t>` collapses to 1.
+        output.holderShare = (((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS) / (uint128)1000ULL).low;
+        output.shareholderShare = (((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS) / (uint128)1000ULL).low;
+        output.clanShare = (((uint128)input.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_CLAN) / (uint128)1000ULL).low;
+        output.reinvestShare = input.amount - output.holderShare - output.shareholderShare - output.clanShare;
     }
 
     PUBLIC_FUNCTION_WITH_LOCALS(GetStakingInfo)
@@ -381,7 +411,9 @@ struct WOLFPACK : public ContractBase
 
     PUBLIC_PROCEDURE(SetAdmin)
     {
-        // Allow bootstrap: first call is free when adminAddress is still NULL_ID after deployment
+        // adminAddress is hardcoded in INITIALIZE, so only the current admin
+        // may rotate it. (The NULL_ID clause is a defensive fallback in case
+        // the contract is ever deployed with an unset admin.)
         if (qpi.invocator() != state.get().adminAddress && state.get().adminAddress != NULL_ID)
         {
             output.returnCode = WOLFPACK_ERROR_ACCESS_DENIED;
@@ -579,14 +611,14 @@ struct WOLFPACK : public ContractBase
         REGISTER_USER_PROCEDURE(ClaimStakingRewards, 11);
 
         REGISTER_USER_FUNCTION(GetStakingInfo, 5);
+        REGISTER_USER_FUNCTION(GetExcludeAddresses, 6);
+        REGISTER_USER_FUNCTION(GetDistributionPreview, 7);
     }
 
     // ======================== SYSTEM PROCEDURES ========================
 
     INITIALIZE()
     {
-        // adminAddress stays NULL_ID; deployer must call SetAdmin in construction epoch (bootstrap)
-
         // WP token (external, issued on QX by MLMWPS...)
         state.mut().wpToken.issuer = ID(
             _M, _L, _M, _W, _P, _S, _Q, _N, _V, _A, _I, _B, _R, _F, _D, _H,
@@ -595,6 +627,13 @@ struct WOLFPACK : public ContractBase
             _P, _Q, _X, _A, _C, _Y, _O, _E
         );
         state.mut().wpToken.assetName = WOLFPACK_SC_ASSET_NAME; // "WP"
+
+        // Admin and reinvestment recipient are hardcoded to the WP token
+        // issuer identity. Hardcoding the admin (instead of a NULL_ID bootstrap)
+        // closes the race window where any first caller of SetAdmin could
+        // seize control. The admin can still rotate itself later via SetAdmin.
+        state.mut().adminAddress = state.get().wpToken.issuer;
+        state.mut().reinvestAddress = state.get().wpToken.issuer;
 
         state.mut().totalTokensSnapshot = 0;
         state.mut().holderCount = 0;
@@ -725,7 +764,7 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.rewardThisEpoch, state.get().totalStaked);
                 locals.remainder = mod(locals.rewardThisEpoch, state.get().totalStaked);
-                locals.stakerReward = locals.quotient * locals.stakerTokens + (uint64)(((uint128)locals.remainder * (uint128)locals.stakerTokens) / (uint128)state.get().totalStaked);
+                locals.stakerReward = locals.quotient * locals.stakerTokens + (((uint128)locals.remainder * (uint128)locals.stakerTokens) / (uint128)state.get().totalStaked).low;
                 if (locals.stakerReward == 0) continue;
 
                 locals.existingReward = 0;
@@ -790,9 +829,9 @@ struct WOLFPACK : public ContractBase
 
         // --- Step 1: Split revenue ---
         locals.amount = state.get().pendingRevenue;
-        locals.holderShare = (uint64)(((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS) / (uint128)1000ULL);
-        locals.shareholderShare = (uint64)(((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS) / (uint128)1000ULL);
-        locals.clanShare = (uint64)(((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_CLAN) / (uint128)1000ULL);
+        locals.holderShare = (((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS) / (uint128)1000ULL).low;
+        locals.shareholderShare = (((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS) / (uint128)1000ULL).low;
+        locals.clanShare = (((uint128)locals.amount * (uint128)WOLFPACK_DISTRIBUTION_PERMILLE_CLAN) / (uint128)1000ULL).low;
         locals.reinvestShare = locals.amount - locals.holderShare - locals.shareholderShare - locals.clanShare;
 
         state.mut().pendingRevenue = 0;
@@ -817,7 +856,7 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.holderShare, state.get().totalTokensSnapshot);
                 locals.remainder = mod(locals.holderShare, state.get().totalTokensSnapshot);
-                locals.reward = locals.quotient * locals.tokens + (uint64)(((uint128)locals.remainder * (uint128)locals.tokens) / (uint128)state.get().totalTokensSnapshot);
+                locals.reward = locals.quotient * locals.tokens + (((uint128)locals.remainder * (uint128)locals.tokens) / (uint128)state.get().totalTokensSnapshot).low;
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
@@ -846,7 +885,7 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.shareholderShare, state.get().totalSharesSnapshot);
                 locals.remainder = mod(locals.shareholderShare, state.get().totalSharesSnapshot);
-                locals.reward = locals.quotient * locals.tokens + (uint64)(((uint128)locals.remainder * (uint128)locals.tokens) / (uint128)state.get().totalSharesSnapshot);
+                locals.reward = locals.quotient * locals.tokens + (((uint128)locals.remainder * (uint128)locals.tokens) / (uint128)state.get().totalSharesSnapshot).low;
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
@@ -881,13 +920,29 @@ struct WOLFPACK : public ContractBase
 
                 locals.quotient = div(locals.clanShare, state.get().clanWeightedTotal);
                 locals.remainder = mod(locals.clanShare, state.get().clanWeightedTotal);
-                locals.reward = locals.quotient * locals.multiplier + (uint64)(((uint128)locals.remainder * (uint128)locals.multiplier) / (uint128)state.get().clanWeightedTotal);
+                locals.reward = locals.quotient * locals.multiplier + (((uint128)locals.remainder * (uint128)locals.multiplier) / (uint128)state.get().clanWeightedTotal).low;
                 if (locals.reward == 0) continue;
                 if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
 
                 qpi.transfer(locals.holder, locals.reward);
                 locals.contractBalance = locals.contractBalance - locals.reward;
                 if (locals.contractBalance == 0) break;
+            }
+        }
+
+        // --- Step 5: Push 10% reinvestment share to the reinvest address ---
+        if (locals.reinvestShare > 0 && state.get().reinvestAddress != NULL_ID)
+        {
+            if (locals.contractBalance == 0)
+            {
+                qpi.getEntity(SELF, locals.entity);
+                locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
+            }
+            locals.reward = locals.reinvestShare;
+            if (locals.reward > locals.contractBalance) locals.reward = locals.contractBalance;
+            if (locals.reward > 0)
+            {
+                qpi.transfer(state.get().reinvestAddress, locals.reward);
             }
         }
     }
