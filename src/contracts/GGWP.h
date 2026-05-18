@@ -1,22 +1,22 @@
 using namespace QPI;
 
 // ============================================================================
-// WolfPack (WP) - Revenue Distribution & Staking Smart Contract
+// WolfPack (GGWP) - Revenue Distribution & Staking Smart Contract
 //
 // --- Revenue Payout (triggered daily at 11:00 UTC via END_TICK) ---
 //
 //   Revenue split:
-//     70% -> WP token holders (proportional to token holdings)
+//     70% -> GGWP token holders (proportional to token holdings)
 //     10% -> SC shareholders (676 IPO shares, issuer=NULL_ID)
 //     10% -> Active clan members (weighted by rank multiplier)
 //     10% -> Reinvestment address (transferred out each payout)
 //
-//   WP token holders are snapshotted at BEGIN_EPOCH via AssetPossessionIterator.
+//   GGWP token holders are snapshotted at BEGIN_EPOCH via AssetPossessionIterator.
 //   SC shareholders (IPO shares) are also snapshotted at BEGIN_EPOCH separately.
 //
 // --- Staking ---
 //
-//   WP holders can stake their tokens into the contract.
+//   GGWP holders can stake their tokens into the contract.
 //   Each epoch a fixed reward (WOLFPACK_STAKING_REWARD_PER_EPOCH) is distributed
 //   proportionally among stakers from the staking reward pool.
 //   Unstaking requires a delay of WOLFPACK_UNSTAKE_DELAY_EPOCHS epochs.
@@ -31,7 +31,7 @@ constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_HOLDERS = 700;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_SHAREHOLDERS = 100;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_CLAN = 100;
 constexpr uint64 WOLFPACK_DISTRIBUTION_PERMILLE_REINVEST = 100;
-constexpr uint64 WOLFPACK_SC_ASSET_NAME = 20567ULL; // "WP" as uint64
+constexpr uint64 WOLFPACK_SC_ASSET_NAME = 1347897159ULL; // "GGWP" as uint64
 
 // Payout timing
 constexpr uint8 WOLFPACK_PAYOUT_HOUR = 11; // 11:00 UTC
@@ -85,7 +85,7 @@ struct WOLFPACK : public ContractBase
     {
         id adminAddress;
 
-        // WP token asset reference (external token on QX)
+        // GGWP token asset reference (external token on QX)
         Asset wpToken;
 
         // Token holder snapshot (taken at BEGIN_EPOCH) - 70% pool
@@ -94,7 +94,7 @@ struct WOLFPACK : public ContractBase
         uint64 holderCount;
 
         // SC shareholder snapshot (taken at BEGIN_EPOCH) - 10% pool
-        // These are the 676 IPO shares (issuer=NULL_ID, name="WP")
+        // These are the 676 IPO shares (issuer=NULL_ID, name="GGWP")
         HashMap<id, uint64, WOLFPACK_MAX_SHAREHOLDERS> shareholderBalances;
         uint64 totalSharesSnapshot;
         uint64 shareholderCount;
@@ -129,7 +129,7 @@ struct WOLFPACK : public ContractBase
         HashMap<id, uint64, WOLFPACK_MAX_HOLDERS> unstakeEpochs;
         uint64 unstakeCount;
 
-        // Staking reward pool (WP tokens held by SC for distribution)
+        // Staking reward pool (GGWP tokens held by SC for distribution)
         uint64 stakingRewardPool;
         uint64 totalStakingRewardsDistributed;
 
@@ -465,8 +465,8 @@ struct WOLFPACK : public ContractBase
             output.returnCode = WOLFPACK_ERROR_UNSTAKE_PENDING;
             return;
         }
-        // Verify invocator has enough WP shares already under WP's management.
-        // User must call QX.TransferShareManagementRights(asset=wpToken, shares=N, newMgmtIdx=WP) first.
+        // Verify invocator has enough GGWP shares already under WP's management.
+        // User must call QX.TransferShareManagementRights(asset=wpToken, shares=N, newMgmtIdx=GGWP) first.
         if (qpi.numberOfPossessedShares(state.get().wpToken.assetName, state.get().wpToken.issuer,
             qpi.invocator(), qpi.invocator(), SELF_INDEX, SELF_INDEX) < (sint64)input.numberOfShares)
         {
@@ -560,8 +560,8 @@ struct WOLFPACK : public ContractBase
             output.returnCode = WOLFPACK_ERROR_ZERO_AMOUNT;
             return;
         }
-        // Verify invocator has enough WP shares under WP's management.
-        // User must call QX.TransferShareManagementRights(asset=wpToken, newMgmtIdx=WP) first.
+        // Verify invocator has enough GGWP shares under WP's management.
+        // User must call QX.TransferShareManagementRights(asset=wpToken, newMgmtIdx=GGWP) first.
         if (qpi.numberOfPossessedShares(state.get().wpToken.assetName, state.get().wpToken.issuer,
             qpi.invocator(), qpi.invocator(), SELF_INDEX, SELF_INDEX) < (sint64)input.numberOfShares)
         {
@@ -624,16 +624,16 @@ struct WOLFPACK : public ContractBase
 
     INITIALIZE()
     {
-        // WP token (external, issued on QX by MLMWPS...)
+        // GGWP token (external, issued on QX by MLMWPS...)
         state.mut().wpToken.issuer = ID(
             _M, _L, _M, _W, _P, _S, _Q, _N, _V, _A, _I, _B, _R, _F, _D, _H,
             _W, _C, _K, _S, _F, _O, _V, _U, _A, _Z, _D, _D, _W, _K, _J, _G,
             _C, _L, _R, _S, _Y, _Z, _I, _U, _E, _F, _D, _U, _R, _P, _W, _I,
             _P, _Q, _X, _A, _C, _Y, _O, _E
         );
-        state.mut().wpToken.assetName = WOLFPACK_SC_ASSET_NAME; // "WP"
+        state.mut().wpToken.assetName = WOLFPACK_SC_ASSET_NAME; // "GGWP"
 
-        // Admin and reinvestment recipient are hardcoded to the WP token
+        // Admin and reinvestment recipient are hardcoded to the GGWP token
         // issuer identity. Hardcoding the admin (instead of a NULL_ID bootstrap)
         // closes the race window where any first caller of SetAdmin could
         // seize control. The admin can still rotate itself later via SetAdmin.
@@ -663,7 +663,7 @@ struct WOLFPACK : public ContractBase
         state.mut().totalStakingRewardsDistributed = 0;
     }
 
-    // Snapshot WP token holders AND SC shareholders at the start of each epoch
+    // Snapshot GGWP token holders AND SC shareholders at the start of each epoch
     struct BEGIN_EPOCH_locals
     {
         AssetPossessionIterator tokenIter;
@@ -683,7 +683,7 @@ struct WOLFPACK : public ContractBase
     };
     BEGIN_EPOCH_WITH_LOCALS()
     {
-        // ---- Pass 1: WP Token holders (external token, issuer=MLMWPS...) ----
+        // ---- Pass 1: GGWP Token holders (external token, issuer=MLMWPS...) ----
         state.mut().holderBalances.reset();
         state.mut().totalTokensSnapshot = 0;
         state.mut().holderCount = 0;
@@ -717,7 +717,7 @@ struct WOLFPACK : public ContractBase
             }
         }
 
-        // ---- Pass 2: SC shareholders (IPO shares, issuer=NULL_ID, name="WP") ----
+        // ---- Pass 2: SC shareholders (IPO shares, issuer=NULL_ID, name="GGWP") ----
         state.mut().shareholderBalances.reset();
         state.mut().totalSharesSnapshot = 0;
         state.mut().shareholderCount = 0;
@@ -848,7 +848,7 @@ struct WOLFPACK : public ContractBase
         qpi.getEntity(SELF, locals.entity);
         locals.contractBalance = locals.entity.incomingAmount - locals.entity.outgoingAmount;
 
-        // --- Step 2: Push 70% to WP token holders ---
+        // --- Step 2: Push 70% to GGWP token holders ---
         if (locals.holderShare > 0 && state.get().totalTokensSnapshot > 0)
         {
             for (locals.idx = state.get().holderBalances.nextElementIndex(NULL_INDEX);
@@ -954,7 +954,7 @@ struct WOLFPACK : public ContractBase
 
     PRE_ACQUIRE_SHARES()
     {
-        // Accept management rights transfer from QX for WP tokens only.
+        // Accept management rights transfer from QX for GGWP tokens only.
         // This enables users to stake by first calling QX.TransferShareManagementRights.
         if (input.asset.assetName == state.get().wpToken.assetName
             && input.asset.issuer == state.get().wpToken.issuer

@@ -2,6 +2,22 @@
 
 #include "contract_testing.h"
 
+// Pause contract logging for the whole test binary. The logging code path in
+// src/logging/logging.h writes through misaligned pointers (e.g. line 375),
+// which hard-aborts under the test build's -fsanitize=alignment. The
+// `if (isPausing) return;` guard sits before those stores, so pausing the
+// logger avoids the abort. Log output is irrelevant for these unit tests.
+namespace
+{
+class WpLoggingEnv : public ::testing::Environment
+{
+public:
+    void SetUp() override { __pauseLogMessage(); }
+};
+::testing::Environment* const wpLoggingEnv =
+    ::testing::AddGlobalTestEnvironment(new WpLoggingEnv);
+}
+
 
 class WolfPackChecker : public WOLFPACK, public WOLFPACK::StateData
 {
@@ -45,7 +61,12 @@ public:
         // Set admin explicitly for tests that require admin-only procedures.
         getState()->adminAddress = adminAddr;
 
-        // Ensure test users exist in spectrum
+        // Ensure test users exist in spectrum.
+        // Pause logging immediately before increaseEnergy(): its log path in
+        // src/logging/logging.h does misaligned stores that abort under the
+        // test build's -fsanitize=alignment. Earlier setup steps reset the
+        // pause flag, so it must be set here, right before the logging call.
+        __pauseLogMessage();
         increaseEnergy(adminAddr, 0);
         increaseEnergy(user1, 0);
         increaseEnergy(user2, 0);

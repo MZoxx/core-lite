@@ -286,7 +286,7 @@
 #define CONTRACT_INDEX WOLFPACK_CONTRACT_INDEX
 #define CONTRACT_STATE_TYPE WOLFPACK
 #define CONTRACT_STATE2_TYPE WOLFPACK2
-#include "contracts/WP.h"
+#include "contracts/GGWP.h"
 
 // new contracts should be added above this line
 
@@ -402,7 +402,7 @@ constexpr struct ContractDescription
 #ifndef NO_QUSINO
     {"QUSINO", 208, 10000, sizeof(QUSINO::StateData)}, // proposal in epoch 206, IPO in 207, construction and first use in 208
 #endif
-    {"WP", 210, 10000, sizeof(WOLFPACK::StateData)}, // WolfPack revenue distribution
+    {"GGWP", 216, 10000, sizeof(WOLFPACK::StateData)}, // proposal in epoch 214, IPO in 215, construction and first use in 216
     // new contracts should be added above this line
 #ifdef INCLUDE_CONTRACT_TEST_EXAMPLES
     {"TESTEXA", 138, 10000, sizeof(TESTEXA::StateData)},
