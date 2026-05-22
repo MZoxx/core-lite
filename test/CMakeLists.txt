@@ -18,6 +18,9 @@ FetchContent_MakeAvailable(googletest)
 
 get_filename_component(PROJECT_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_ROOT_DIR}/cmake")
+include(CompilerSetup)
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib/platform_common)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib/platform_os)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib/platform_efi) # Currently still needed due to various imports
