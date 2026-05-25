@@ -2,7 +2,7 @@
 
 #include <lib/platform_common/qintrin.h>
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__) || defined(__clang__)
 #define _byteswap_ulong(x) bswap_32(x)
 #define _InterlockedExchange8(target, val) __atomic_exchange_n(target, val, __ATOMIC_SEQ_CST)
 #define _InterlockedIncrement64(target) __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST)
@@ -26,6 +26,15 @@ static long _InterlockedCompareExchange(volatile long *target, long exchange, lo
 #define _InterlockedDecrement(target) __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST)
 #define _InterlockedIncrement(target) __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST)
 #endif
+
+// Pause/yield instruction - platform-specific
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64) || defined(__ARM_ARCH)
+// ARM64 - use yield instruction
+#define _mm_pause() __asm__ __volatile__("yield")
+#else
+// x86/x64 - use pause instruction (included via immintrin.h)
+#endif
+
 
 // Acquire lock, may block
 #define ACQUIRE_WITHOUT_DEBUG_LOGGING(lock) while (_InterlockedCompareExchange8(&lock, 1, 0)) _mm_pause()

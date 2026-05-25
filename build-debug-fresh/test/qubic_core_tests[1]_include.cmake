@@ -1,0 +1,5 @@
+if(EXISTS "/Users/graf/Documents/Dokumente – MacBook Air von Marvin/GitHub/core-lite/build-debug-fresh/test/qubic_core_tests[1]_tests.cmake")
+  include("/Users/graf/Documents/Dokumente – MacBook Air von Marvin/GitHub/core-lite/build-debug-fresh/test/qubic_core_tests[1]_tests.cmake")
+else()
+  add_test(qubic_core_tests_NOT_BUILT qubic_core_tests_NOT_BUILT)
+endif()

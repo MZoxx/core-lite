@@ -23,7 +23,7 @@ include(CompilerSetup)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib/platform_common)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib/platform_os)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib/platform_efi) # Currently still needed due to various imports
+# include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../lib/platform_efi) # Currently still needed due to various imports
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../src)
 include_directories(${PROJECT_ROOT_DIR})
 
@@ -81,17 +81,7 @@ apply_test_compiler_flags(qubic_core_tests)
 
 # Add additional test-specific flags if needed
 if(IS_CLANG OR IS_GCC)
-  target_compile_options(
-          qubic_core_tests
-          PRIVATE
-          -mrdrnd -Wno-error
-          -mbmi
-          -mlzcnt
-          -fshort-wchar
-          -w
-  )
 endif()
-
 
 target_link_libraries(
   qubic_core_tests PRIVATE

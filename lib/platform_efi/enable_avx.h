@@ -8,6 +8,9 @@
 
 #define _XCR_XFEATURE_ENABLED_MASK 0
 
+// Only compile CR4 manipulation code on x86 architectures
+#if !defined(__aarch64__) && !defined(__arm64__) && !defined(_M_ARM64) && !defined(__ARM_ARCH)
+
 #if defined(_MSC_VER) && !defined(__clang__)
     #pragma message("Compiling with MSVC path")
      // MSVC - Use built-in intrinsics
@@ -48,11 +51,15 @@ static void enableAVX()
     // Enable x87 FPU state (bit 0), SSE state (bit 1), and AVX state (bit 2) in XCR0
     _xsetbv(_XCR_XFEATURE_ENABLED_MASK, _xgetbv(_XCR_XFEATURE_ENABLED_MASK) | (7
 #ifdef __AVX512F__
-        // If AVX512F is defined, enable AVX-512 features:
-        // - AVX512 opmask (bit 5)
-        // - AVX-512 upper 256 bits oZMM0-ZMM15 (bit 6) 
-        // - AVX-512 ZMM16-ZMM31 (bit 7)
-        | 224
+    | (0b11100000 << 5)  // AVX512 state (bits 5-7)
 #endif
-        ));
+    ));
 }
+
+#else
+// ARM64 doesn't have CR4 register or AVX
+static void enableAVX()
+{
+    // No-op on ARM64
+}
+#endif

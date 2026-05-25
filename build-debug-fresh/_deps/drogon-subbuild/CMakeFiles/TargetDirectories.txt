@@ -1,0 +1,3 @@
+/Users/graf/Documents/Dokumente – MacBook Air von Marvin/GitHub/core-lite/build-debug-fresh/_deps/drogon-subbuild/CMakeFiles/drogon-populate.dir
+/Users/graf/Documents/Dokumente – MacBook Air von Marvin/GitHub/core-lite/build-debug-fresh/_deps/drogon-subbuild/CMakeFiles/edit_cache.dir
+/Users/graf/Documents/Dokumente – MacBook Air von Marvin/GitHub/core-lite/build-debug-fresh/_deps/drogon-subbuild/CMakeFiles/rebuild_cache.dir
